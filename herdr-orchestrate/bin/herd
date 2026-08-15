@@ -8,6 +8,7 @@ import fcntl, json, os, re, secrets, subprocess, sys, tempfile, time, tomllib
 from contextlib import contextmanager
 
 PROJECT = os.environ.get("HERD_PROJECT", os.getcwd())
+WORKSPACE = os.environ.get("HERD_WORKSPACE")  # optional herdr workspace for new lanes
 HERD_DIR = os.path.join(PROJECT, ".herd")
 LEDGER = os.path.join(HERD_DIR, "ledger.json")
 WORKTREES = os.path.expanduser("~/.herdr/worktrees")
@@ -354,6 +355,8 @@ def cmd_spawn(argv):
         if p.returncode != 0 or not base:
             die("project HEAD is detached; check out a branch before "
                 "spawning worktree lanes")
+        # worktree lanes always open their own herdr workspace; HERD_WORKSPACE
+        # applies to tab lanes only
         rc, d = herdr("worktree", "create", "--cwd", cwd, "--branch", f"lane/{lane}",
                       "--label", lane, "--no-focus")
         if rc != 0:
@@ -365,6 +368,8 @@ def cmd_spawn(argv):
         branch = f"lane/{lane}"
     else:
         targs = ["tab", "create", "--no-focus", "--label", lane, "--cwd", cwd]
+        if WORKSPACE:
+            targs += ["--workspace", WORKSPACE]
         if env:
             targs += ["--env", env]
         rc, d = herdr(*targs)

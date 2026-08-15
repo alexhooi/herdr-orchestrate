@@ -34,7 +34,7 @@ Each of these was earned by a failure. HISTORY.md has the full record.
 
 3. **Reviews arrive as data.** `herd send --review` points reviewers at a findings JSON file (severity, file, line, symptom, fix_hint). `herd triage` returns blocking findings to the owning lane verbatim and backlogs the rest. Cross-review matrix: each model's work is reviewed by a different model.
 
-4. **Ship modes per project.** `scratch`: in-tree. `merge`: worktree lanes on `lane/<name>` branches, review-gated `herd land --no-ff`, conflicts handed back to the owning lane. `pr`: the lane pushes and opens the PR.
+4. **Ship modes per project.** `scratch`: in-tree. `merge`: worktree lanes on `lane/<name>` branches, review-gated `herd land --no-ff`, conflicts handed back to the owning lane. `pr`: the lane pushes and opens the PR — note `herd land` refuses to land locally in this mode and does *not* enforce the review gate; the PR review is the gate.
 
 5. **Vertical slices, not tickets.** One implementer per domain slice, product-level acceptance ("the user can do X"). The orchestrator personally drives the final product before calling it done — including web UI at 390/768/1440 widths with realistic data.
 
