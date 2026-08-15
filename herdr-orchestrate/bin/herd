@@ -1,0 +1,693 @@
+#!/usr/bin/env python3
+"""herd — minimal lane plumbing for herdr orchestration.
+
+One command per orchestrator intent; all herdr mechanics live here.
+Ledger: <project>/.herd/ledger.json  (project = cwd, or HERD_PROJECT).
+"""
+import fcntl, json, os, re, secrets, subprocess, sys, tempfile, time, tomllib
+from contextlib import contextmanager
+
+PROJECT = os.environ.get("HERD_PROJECT", os.getcwd())
+HERD_DIR = os.path.join(PROJECT, ".herd")
+LEDGER = os.path.join(HERD_DIR, "ledger.json")
+WORKTREES = os.path.expanduser("~/.herdr/worktrees")
+SEVERITIES = {"disastrous", "architectural", "blocking", "major", "minor", "nit"}
+HANDBACK_SEVS = {"disastrous", "architectural", "blocking"}
+LANDABLE = {"reviewed", "done", "user-review"}
+
+# Our verified roster — edit models/flags to your own setup. SKILL.md relies
+# on the *consequences* (no approval dialogs, no alt-screen), not these exact
+# model IDs.
+KIND_ARGS = {
+    "claude": ["--model", "claude-fable-5", "--effort", "high",
+               "--permission-mode", "bypassPermissions"],
+    "codex": ["-m", "gpt-5.6-sol", "-c", 'model_reasoning_effort="high"',
+              "-s", "workspace-write", "-a", "never", "--no-alt-screen"],
+    "pi": ["--model", "moonshot/kimi-k3", "--approve"],
+}
+
+FOOTER = ("\n\nFinal message: plain markdown, no box-drawing tables. "
+          "End it with a line containing only the token {tok} and nothing else.")
+
+REVIEW_FOOTER = (
+    "\n\nWrite every finding to the file {ffile} as a JSON array of objects "
+    "{{\"severity\": one of disastrous|architectural|blocking|major|minor|nit, "
+    "\"file\": path, \"line\": int, \"symptom\": str, \"fix_hint\": str}}. "
+    "Write [] if there are none. Severity rule: disastrous/architectural/blocking "
+    "only for findings that must be fixed before this work can ship.")
+
+# Dialog doctrine: herd matches NO dialog text, ever — five adversarial
+# review rounds refuted every text-scrape classifier. Dialog classes are
+# prevented at the source instead: approvals via launch flags (-a never /
+# bypassPermissions / --approve), folder-trust via pretrust() below. Any
+# dialog that still appears fails closed to the orchestrator (exit 3).
+
+
+def die(msg, code=1):
+    print(json.dumps({"ok": False, "error": msg}), file=sys.stderr)
+    sys.exit(code)
+
+
+def herdr(*args, check=True):
+    p = subprocess.run(["herdr", *args], capture_output=True, text=True)
+    out = p.stdout.strip() or p.stderr.strip()
+    try:
+        data = json.loads(out)
+    except (json.JSONDecodeError, ValueError):
+        data = {"raw": out}
+    if check and p.returncode != 0:
+        data["_exit"] = p.returncode
+    return p.returncode, data
+
+
+def git(cwd, *args):
+    return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+
+
+def dirty(cwd):
+    p = git(cwd, "status", "--porcelain")
+    return bool(p.stdout.strip())
+
+
+def load():
+    try:
+        with open(LEDGER) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"ship_mode": "scratch", "lanes": {}}
+    except json.JSONDecodeError:
+        bak = LEDGER + ".corrupt"
+        os.replace(LEDGER, bak)
+        die(f"ledger was corrupt JSON; moved to {bak} — recover it, do not respawn lanes blindly")
+
+
+def save(led):
+    os.makedirs(HERD_DIR, exist_ok=True)
+    tmp = LEDGER + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(led, f, indent=1)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, LEDGER)
+
+
+def mutate(fn):
+    """Locked read-modify-write; concurrent herd processes must not clobber
+    each other's ledger updates."""
+    os.makedirs(HERD_DIR, exist_ok=True)
+    with open(os.path.join(HERD_DIR, "lock"), "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        led = load()
+        out = fn(led)
+        save(led)
+        return out
+
+
+def live_agents():
+    _, d = herdr("agent", "list")
+    return {a.get("name"): a for a in d.get("result", {}).get("agents", []) if a.get("name")}
+
+
+def read_pane(target, lines=300, source="recent-unwrapped"):
+    _, d = herdr("agent", "read", target, "--source", source, "--lines", str(lines))
+    text = d.get("result", {}).get("text", d.get("raw", ""))
+    if not text.strip() and source != "visible":
+        # startup dialogs and mid-render reads can be visible-screen only
+        _, d = herdr("agent", "read", target, "--source", "visible")
+        text = d.get("result", {}).get("text", d.get("raw", ""))
+    return text
+
+
+def agent_status(name):
+    rc, d = herdr("agent", "get", name)
+    if rc != 0:
+        return None
+    return d.get("result", {}).get("agent", {}).get("agent_status")
+
+
+@contextmanager
+def _config_lock():
+    lock_dir = os.path.expanduser("~/.herdr")
+    os.makedirs(lock_dir, exist_ok=True)
+    with open(os.path.join(lock_dir, "config.lock"), "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _write_temp(path, text, mode=None):
+    fd, tmp = tempfile.mkstemp(prefix=".herd-", dir=os.path.dirname(path))
+    try:
+        if mode is not None:
+            os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            fd = -1
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        return tmp
+    except Exception:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _toml_basic(value):
+    out = ['"']
+    escapes = {'"': '\\"', "\\": "\\\\", "\b": "\\b", "\t": "\\t",
+               "\n": "\\n", "\f": "\\f", "\r": "\\r"}
+    for ch in value:
+        code = ord(ch)
+        if ch in escapes:
+            out.append(escapes[ch])
+        elif code <= 0x1f or code == 0x7f:
+            out.append(f"\\u{code:04X}")
+        elif 0xd800 <= code <= 0xdfff:
+            raise RuntimeError("Codex config cannot represent cwd containing invalid UTF-8")
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
+
+def _stat_id(st):
+    return st.st_mtime_ns, st.st_size, st.st_ino
+
+
+def _install(path, tmp, st):
+    """Stat-gated atomic replace. True = committed; False = the file changed
+    since it was read — caller re-reads and retries. The gate leaves the
+    stat->rename microsecond window open to lockless external writers; herd
+    accepts that residual by decision — the fully-hardened detect-and-repair
+    rename-exchange version this replaced is described in HISTORY.md."""
+    if st is None:
+        try:
+            os.link(tmp, path)  # creation that cannot clobber a racing creator
+        except FileExistsError:
+            return False
+        return True
+    try:
+        if _stat_id(os.stat(path)) != _stat_id(st):
+            return False
+    except FileNotFoundError:
+        return False
+    os.replace(tmp, path)
+    return True
+
+
+def pretrust(kind, cwd):
+    """Pre-seed the CLI's own trust store for cwd so the folder-trust dialog
+    never appears — the same eliminate-at-source move as `-a never`. pi is
+    handled by its --approve launch flag.
+
+    Best-effort BY DECISION (see README): only the two real cases are
+    handled — already trusted (no-op) and entry absent (append, which never
+    touches existing bytes). Anything else — entry present but untrusted,
+    unparseable config — is SKIPPED silently; the dialog then falls to the
+    doctrinal exit-3 path (watch self-notifies, orchestrator answers once).
+    Never escalate a pretrust miss into a spawn failure."""
+    cwd = os.path.realpath(cwd)
+    if kind == "codex":
+        path = os.path.expanduser("~/.codex/config.toml")
+        with _config_lock():
+            for _ in range(3):
+                try:
+                    with open(path, encoding="utf-8", newline="") as f:
+                        text, st = f.read(), os.fstat(f.fileno())
+                except FileNotFoundError:
+                    text, st = "", None
+                except UnicodeError:
+                    return  # not ours to fix; dialog falls through
+                try:
+                    projects = tomllib.loads(text).get("projects", {})
+                except tomllib.TOMLDecodeError:
+                    return
+                if not isinstance(projects, dict) or cwd in projects:
+                    return  # trusted already, or a layout we don't rewrite
+                gap = "" if not text or text.endswith("\n") else "\n"
+                candidate = (text + gap + f'\n[projects.{_toml_basic(cwd)}]\n'
+                             'trust_level = "trusted"\n')
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                tmp = _write_temp(path, candidate,
+                                  st.st_mode & 0o7777 if st is not None else None)
+                try:
+                    if _install(path, tmp, st):
+                        return
+                finally:
+                    try:
+                        os.unlink(tmp)
+                    except FileNotFoundError:
+                        pass
+    elif kind == "claude":
+        path = os.path.expanduser("~/.claude.json")
+        with _config_lock():
+            for _ in range(3):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        st = os.fstat(f.fileno())
+                        data = json.load(f)
+                except (FileNotFoundError, json.JSONDecodeError, UnicodeError):
+                    return  # don't guess at a missing/corrupt store; dialog fails closed
+                if not isinstance(data, dict):
+                    return
+                projects = data.setdefault("projects", {})
+                if not isinstance(projects, dict):
+                    return
+                project = projects.setdefault(cwd, {})
+                if not isinstance(project, dict) or project.get("hasTrustDialogAccepted"):
+                    return
+                project["hasTrustDialogAccepted"] = True
+                tmp = _write_temp(path, json.dumps(data, indent=2) + "\n",
+                                  st.st_mode & 0o7777)
+                try:
+                    if _install(path, tmp, st):
+                        return
+                finally:
+                    try:
+                        os.unlink(tmp)
+                    except FileNotFoundError:
+                        pass
+
+
+def notify(title, body, sound="done"):
+    rc, d = herdr("notification", "show", title, "--body", body, "--sound", sound)
+    shown = d.get("result", {}).get("shown", False)
+    if not shown:
+        t = title.replace("\\", "").replace('"', "'")
+        b = body.replace("\\", "").replace('"', "'")
+        subprocess.run(["osascript", "-e",
+                        f'display notification "{b}" with title "{t}"'],
+                       capture_output=True)
+    return shown
+
+
+# ---------- commands ----------
+
+def cmd_spawn(argv):
+    lane, kind = argv[0], None
+    cwd, extra, use_worktree, profile = PROJECT, [], False, None
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a == "--kind":
+            kind = argv[i + 1]; i += 2
+        elif a == "--cwd":
+            cwd = argv[i + 1]; i += 2
+        elif a == "--worktree":
+            use_worktree = True; i += 1
+        elif a == "--profile":
+            profile = argv[i + 1]; i += 2
+        elif a == "--":
+            extra = argv[i + 1:]; break
+        else:
+            die(f"unknown arg {a}")
+    if not kind:
+        die("--kind required")
+    # --profile <name>: pi lane runs with PI_CODING_AGENT_DIR=~/.pi/agent-<name>
+    # (a config dir sharing auth/models/npm with ~/.pi/agent via symlinks but
+    # its own settings.json/extensions — e.g. profile "kimi" drops mega-compact).
+    # Tab lanes only: herdr worktree create has no --env.
+    env = None
+    if profile:
+        if kind != "pi":
+            die("--profile is pi-only")
+        if use_worktree:
+            die("--profile requires a tab lane (herdr worktree create has no --env)")
+        pdir = os.path.expanduser(f"~/.pi/agent-{profile}")
+        os.path.isdir(pdir) or die(f"pi profile dir {pdir} does not exist")
+        env = f"PI_CODING_AGENT_DIR={pdir}"
+    alive = live_agents()
+    if lane in alive and alive[lane]["agent"] == kind:
+        a = alive[lane]
+        old = load()["lanes"].get(lane) or {}
+        acwd = os.path.realpath(a.get("cwd") or "/nonexistent")
+        # identity: same pane as recorded, or cwd inside THIS project or the
+        # lane's own recorded worktree — never a mere string prefix, never
+        # the global worktree root
+        same_pane = old.get("pane") == a["pane_id"]
+        proj = os.path.realpath(PROJECT)
+        in_proj = acwd == proj or acwd.startswith(proj + os.sep)
+        own_wt = old.get("cwd") and acwd == os.path.realpath(old["cwd"])
+        if not (same_pane or in_proj or own_wt):
+            die(f"live agent '{lane}' does not match this project "
+                f"(cwd {acwd}); pick another lane name")
+
+        def adopt(led):
+            rec = led["lanes"].setdefault(lane, {})
+            # ownership survives only when the live agent is the very
+            # pane we created; a rebound name is not ours to close
+            rec["ours"] = bool(rec.get("ours")) and same_pane
+            rec.update(kind=kind, pane=a["pane_id"], tab=a["tab_id"])
+            rec.setdefault("state", "queued")
+            return rec["pane"]
+        pane = mutate(adopt)
+        print(json.dumps({"ok": True, "lane": lane, "adopted": True, "pane": pane}))
+        return
+    branch = workspace = None
+    base = None
+    if use_worktree:
+        p = git(cwd, "symbolic-ref", "--short", "HEAD")
+        base = p.stdout.strip()
+        if p.returncode != 0 or not base:
+            die("project HEAD is detached; check out a branch before "
+                "spawning worktree lanes")
+        rc, d = herdr("worktree", "create", "--cwd", cwd, "--branch", f"lane/{lane}",
+                      "--label", lane, "--no-focus")
+        if rc != 0:
+            die(f"worktree create failed: {d}")
+        res = d["result"]
+        pane = res["root_pane"]["pane_id"]; tab = res["tab"]["tab_id"]
+        wt_path = res["root_pane"]["cwd"]
+        workspace = res["workspace"]["workspace_id"]
+        branch = f"lane/{lane}"
+    else:
+        targs = ["tab", "create", "--no-focus", "--label", lane, "--cwd", cwd]
+        if env:
+            targs += ["--env", env]
+        rc, d = herdr(*targs)
+        if rc != 0:
+            die(f"tab create failed: {d}")
+        res = d["result"]
+        pane = res["root_pane"]["pane_id"]; tab = res["tab"]["tab_id"]
+        wt_path = cwd
+    def cleanup():
+        if workspace:
+            herdr("worktree", "remove", "--workspace", workspace, "--force",
+                  check=False)
+        else:
+            herdr("tab", "close", tab, check=False)
+    try:
+        pretrust(kind, wt_path)
+    except Exception as exc:
+        # best-effort: a pretrust miss means a trust dialog, and the exit-3
+        # dialog path already handles that — never abort the spawn for it
+        print(f"pretrust skipped for {kind}: {exc}", file=sys.stderr)
+    args = ["agent", "start", lane, "--kind", kind, "--pane", pane]
+    kargs = KIND_ARGS.get(kind, []) + list(extra)
+    if kargs:
+        args += ["--", *kargs]
+    for _ in range(10):  # fresh tab's shell may not be at its prompt yet
+        rc, d = herdr(*args)
+        if rc == 0 or "agent_pane_busy" not in json.dumps(d):
+            break
+        time.sleep(1)
+    if rc != 0:
+        cleanup()
+        die(f"agent start failed: {d}")
+    # pi lanes with a --model override: confirm the model actually took, by
+    # grepping pi-powerline's plain-text breadcrumb (display name, e.g.
+    # "Claude Fable 5" for claude-bridge/claude-fable-5). Advisory, never
+    # fatal: verified false means the orchestrator must check before sending.
+    model_req = model_ok = None
+    if kind == "pi":
+        for j, a in enumerate(kargs):
+            if a == "--model" and j + 1 < len(kargs):
+                model_req = kargs[j + 1]  # last one wins, matching pi itself
+    if model_req:
+        want = [t for t in re.split(r"[^a-z0-9]+",
+                model_req.rsplit("/", 1)[-1].lower()) if t]
+        deadline = time.time() + 35  # banners can take 20-30s to render
+        model_ok = False
+        while time.time() < deadline:
+            toks = set(re.split(r"[^a-z0-9]+", (read_pane(lane) or "").lower()))
+            if want and all(t in toks for t in want):
+                model_ok = True
+                break
+            time.sleep(3)
+    rec = {"kind": kind, "pane": pane, "tab": tab, "cwd": wt_path, "base": base,
+           "branch": branch, "workspace": workspace, "state": "queued", "ours": True}
+    if profile:
+        rec["profile"] = profile
+    if model_req:
+        rec["model"] = model_req
+    mutate(lambda led: led["lanes"].__setitem__(lane, rec))
+    out = {"ok": True, "lane": lane, "pane": pane, "tab": tab,
+           "cwd": wt_path, "branch": branch}
+    if model_req:
+        out["model"] = model_req
+        out["model_verified"] = model_ok
+    print(json.dumps(out))
+
+
+def cmd_send(argv):
+    lane = argv[0]
+    src, review, state = None, False, None
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a == "--file":
+            src = open(argv[i + 1]).read(); i += 2
+        elif a == "--review":
+            review = True; i += 1
+        elif a == "--state":
+            state = argv[i + 1]; i += 2
+        else:
+            src = a; i += 1
+    if src is None:
+        src = sys.stdin.read()
+    if not src.strip():
+        die("refusing to send an empty prompt")
+    load()["lanes"].get(lane) or die(f"unknown lane {lane}")
+    tok = "REPORT-END-" + secrets.token_hex(3)
+    prompt = src
+    ffile = None
+    if review:
+        def bump(led):
+            r = led["lanes"][lane]
+            r["reviews"] = r.get("reviews", 0) + 1
+            r["findings"] = os.path.join(HERD_DIR,
+                                         f"findings-{lane}-{r['reviews']}.json")
+            return r["findings"]
+        ffile = mutate(bump)
+        prompt += REVIEW_FOOTER.format(ffile=ffile)
+    prompt += FOOTER.format(tok=tok)
+    delivered, attempts, tail = False, 0, ""
+    while attempts < 4 and not delivered:
+        attempts += 1
+        herdr("agent", "prompt", lane, prompt)
+        # Delivery evidence: the unique token echoed in the pane, or the
+        # agent visibly working. Reads can transiently return empty while
+        # the agent renders — retry before concluding the prompt was eaten;
+        # resubmitting onto a working agent double-queues.
+        for _ in range(6):
+            time.sleep(2)
+            tail = read_pane(lane)
+            if (tail and tok in re.sub(r"\s+", " ", tail)) \
+                    or agent_status(lane) == "working":
+                delivered = True
+                break
+        if delivered:
+            break
+        if agent_status(lane) == "blocked":
+            die(f"lane {lane} blocked on a dialog; answer it yourself, "
+                f"then resend. pane tail:\n" + tail[-1500:], 3)
+        time.sleep(2)  # plain eaten prompt: just resubmit
+    if not delivered:
+        die(f"prompt to {lane} not delivered after {attempts} attempts", 2)
+
+    def fin(led):
+        r = led["lanes"][lane]
+        r["token"] = tok
+        if state:
+            r["state"] = state
+    mutate(fin)
+    print(json.dumps({"ok": True, "lane": lane, "attempts": attempts, "token": tok,
+                      "findings": ffile}))
+
+
+def cmd_watch(argv):
+    lane = argv[0]
+    timeout = 3600
+    if "--timeout" in argv:
+        timeout = int(argv[argv.index("--timeout") + 1])
+    led = load()
+    rec = led["lanes"].get(lane) or die(f"unknown lane {lane}")
+    tok = rec.get("token") or die(f"lane {lane} has no outstanding prompt token")
+    sentinel = re.compile(rf"^\s*{re.escape(tok)}\s*$", re.M)
+    deadline = time.time() + timeout
+    blocked_polls = 0
+    while time.time() < deadline:
+        tail = read_pane(lane, 400)
+        st = agent_status(lane)
+        if st is None:
+            notify(f"lane {lane} needs you", "worker agent is gone", "request")
+            die(f"lane {lane} agent is gone", 2)
+        if sentinel.search(tail) and st != "working":
+            print(json.dumps({"ok": True, "lane": lane, "status": st,
+                              "tail": tail[-3000:]}))
+            return
+        if st == "blocked":
+            # watch NEVER answers dialogs (text-scrape classification was
+            # adversarially refuted three rounds running) — it fails closed
+            # to the orchestrator. blocked can lag after a dialog was already
+            # answered, so only a persistent blocked state is a real ask.
+            # Escalation is never silent: watch notifies before exiting.
+            blocked_polls += 1
+            if blocked_polls >= 3:
+                notify(f"lane {lane} needs you",
+                       "blocked on a dialog; read the pane and answer it",
+                       "request")
+                die(f"lane {lane} blocked on a dialog; pane tail:\n"
+                    + tail[-1500:], 3)
+        else:
+            blocked_polls = 0
+        time.sleep(5)
+    notify(f"lane {lane} needs you", f"watch timed out after {timeout}s", "request")
+    die(f"watch {lane} timed out after {timeout}s", 4)
+
+
+def cmd_status(_argv):
+    led = load()
+    alive = live_agents()
+    rows = []
+    for lane, rec in led["lanes"].items():
+        a = alive.get(lane)
+        liveness = "live" if a and a["agent"] == rec["kind"] else "DEAD"
+        rows.append(f"{lane:16} {rec['kind']:7} {rec.get('state','?'):14} "
+                    f"{liveness:5} task: {rec.get('task','-')}")
+    print(f"ship_mode: {led.get('ship_mode', 'scratch')}")
+    print("\n".join(rows) if rows else "no lanes")
+
+
+def cmd_set(argv):
+    def apply(led):
+        if argv[0] == "ship_mode":
+            led["ship_mode"] = argv[1]
+            return
+        rec = led["lanes"].get(argv[0]) or die(f"unknown lane {argv[0]}")
+        for kv in argv[1:]:
+            k, _, v = kv.partition("=")
+            rec[k] = v
+    mutate(apply)
+    print(json.dumps({"ok": True}))
+
+
+def cmd_triage(argv):
+    ffile = argv[0]
+    backlog = argv[argv.index("--backlog") + 1] if "--backlog" in argv else None
+    findings = json.load(open(ffile))
+    if not isinstance(findings, list) or any(not isinstance(f, dict) for f in findings):
+        die("findings file is not a JSON array of objects")
+    # fail closed: unknown severities are handed back, never silently backlogged
+    handback = [f for f in findings
+                if f.get("severity") not in SEVERITIES
+                or f["severity"] in HANDBACK_SEVS]
+    rest = [f for f in findings if f not in handback]
+    if rest and not backlog:
+        die(f"{len(rest)} non-blocking findings but no --backlog file given; "
+            "refusing to drop them")
+    if rest:
+        lines = [f"- [{f.get('severity','?')}] {f.get('file','?')}:{f.get('line','?')} — "
+                 f"{f.get('symptom','')}" for f in rest]
+        try:
+            text = open(backlog).read()
+        except FileNotFoundError:
+            text = ""
+        if "## Bugs" not in text:
+            text += "\n## Bugs\n"
+        text = text.rstrip("\n") + "\n" + "\n".join(lines) + "\n"
+        with open(backlog, "w") as f:
+            f.write(text)
+    print(json.dumps({"ok": True, "handback": handback, "backlogged": len(rest),
+                      "backlog_file": backlog if rest else None}))
+
+
+def cmd_land(argv):
+    lane = argv[0]
+    led = load()
+    rec = led["lanes"].get(lane) or die(f"unknown lane {lane}")
+    mode = led.get("ship_mode", "scratch")
+    if mode == "scratch" or not rec.get("branch"):
+        print(json.dumps({"ok": True, "lane": lane, "mode": mode,
+                          "note": "scratch mode: work is already in the tree"}))
+        return
+    if mode == "pr":
+        print(json.dumps({"ok": True, "lane": lane, "mode": "pr",
+                          "note": "pr mode: herd does not land locally — have the "
+                                  "lane push its branch and open the PR per the "
+                                  "project's contributing docs"}))
+        return
+    if rec.get("state") not in LANDABLE:
+        die(f"review gate: lane {lane} is '{rec.get('state')}' — set state=reviewed "
+            "after its review passes before landing", 4)
+    if rec.get("cwd") and os.path.isdir(rec["cwd"]) and dirty(rec["cwd"]):
+        die(f"lane {lane} worktree has uncommitted changes; have the lane commit "
+            "or discard them before landing", 4)
+    base = rec.get("base") or "main"
+    cur = git(PROJECT, "symbolic-ref", "--short", "HEAD").stdout.strip()
+    if cur != base:
+        die(f"project is on branch '{cur}' but lane {lane} was cut from '{base}'; "
+            "check out the base branch before landing", 4)
+    if dirty(PROJECT):
+        die("project tree is dirty; refusing to merge into it", 4)
+    br = rec["branch"]
+    p = git(PROJECT, "merge", "--no-ff", "--no-edit", br)
+    if p.returncode != 0:
+        merging = os.path.exists(os.path.join(PROJECT, ".git", "MERGE_HEAD"))
+        if merging:
+            files = git(PROJECT, "diff", "--name-only",
+                        "--diff-filter=U").stdout.split()
+            git(PROJECT, "merge", "--abort")
+            die(json.dumps({"conflict": True, "lane": lane, "branch": br,
+                            "files": files,
+                            "detail": (p.stdout + p.stderr)[-800:]}), 3)
+        die(f"merge failed (not a conflict): {(p.stdout + p.stderr)[-800:]}")
+    mutate(lambda led: led["lanes"][lane].__setitem__("state", "done"))
+    print(json.dumps({"ok": True, "lane": lane, "merged": br}))
+
+
+def cmd_close(argv):
+    lane = argv[0]
+    force = "--force" in argv
+    led = load()
+    rec = led["lanes"].get(lane) or die(f"unknown lane {lane}")
+    if not rec.get("ours"):
+        die(f"lane {lane} tab was not created by herd; refusing to close")
+    st = agent_status(lane)
+    # only affirmatively settled agents (or no agent at all) may be closed;
+    # `unknown` means herdr can't classify it — that is not settled
+    if st not in (None, "idle", "done") and not force:
+        die(f"lane {lane} agent is {st}; read its pane first (--force to override)", 4)
+    if (rec.get("workspace") and not force
+            and os.path.isdir(rec.get("cwd", "")) and dirty(rec["cwd"])):
+        die(f"lane {lane} worktree has uncommitted work; commit/land it "
+            "or --force to discard", 4)
+    if rec.get("workspace"):
+        rc, d = herdr("worktree", "remove", "--workspace", rec["workspace"],
+                      "--force", check=False)
+    elif rec.get("tab"):
+        rc, d = herdr("tab", "close", rec["tab"], check=False)
+    else:
+        rc, d = 0, {}
+    if rc != 0:
+        die(f"close failed: {d}")
+
+    def apply(led):
+        r = led["lanes"][lane]
+        if r.get("state") != "done":
+            r["state"] = "closed"
+        r["tab"] = None
+    mutate(apply)
+    print(json.dumps({"ok": True, "lane": lane}))
+
+
+def cmd_notify(argv):
+    title = argv[0]
+    body = argv[argv.index("--body") + 1] if "--body" in argv else ""
+    sound = argv[argv.index("--sound") + 1] if "--sound" in argv else "done"
+    shown = notify(title, body, sound)
+    print(json.dumps({"ok": True, "toast": shown, "fallback": not shown}))
+
+
+CMDS = {"spawn": cmd_spawn, "send": cmd_send, "watch": cmd_watch, "status": cmd_status,
+        "set": cmd_set, "triage": cmd_triage, "land": cmd_land, "close": cmd_close,
+        "notify": cmd_notify}
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
+        print("usage: herd " + "|".join(CMDS) + " ...", file=sys.stderr)
+        sys.exit(2)
+    CMDS[sys.argv[1]](sys.argv[2:])
