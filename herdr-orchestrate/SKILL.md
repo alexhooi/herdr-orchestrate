@@ -10,13 +10,14 @@ Precondition: `test "${HERDR_ENV:-}" = 1` — otherwise say so and stop.
 All lane plumbing is one tool: `<this skill dir>/bin/herd` (on PATH or by absolute path) — every command below is `herd <verb>`. Run it from the project directory (or set `HERD_PROJECT`); it keeps a ledger in `<project>/.herd/ledger.json`.
 
 Preflight once per session:
+
 - `herdr integration status --outdated-only` — update anything listed; outdated integrations re-raise trust dialogs on spawn.
 - `herd status` — an existing ledger means you are **resuming**: adopt it (see Resume), don't spawn duplicates.
 
 ## Roles
 
 | lane name | kind | takes |
-|---|---|---|
+| --- | --- | --- |
 | (this session) | claude | routing, triage, status. NEVER implements or reviews |
 | `impl-fable[-<slice>]` | claude (Fable, high) | owns a slice as its pseudo-orchestrator: architecture, integration, acceptance — spawns its own Sol/kimi sub-lanes for scoped chunks. Fable typing well-specified code itself is a routing smell |
 | `impl-sol[-<slice>]` | codex | scoped, well-specified tasks |
@@ -28,7 +29,7 @@ Sub-lanes an implementer spawns are namespaced under it (`impl-fable-api-sol-1`)
 
 ## Spawning
 
-`herd spawn` (syntax in the lifecycle block below) bakes in the verified per-kind launch flags (single source: `KIND_ARGS` in `bin/herd`) — approvals and sandboxing are set at launch so routine dialogs are prevented, and codex gets `--no-alt-screen` (without it completed responses are unrecoverable from scrollback). Workers are visible interactive panes the captain can watch and interrupt. Extra native args go after `--`. `--profile <name>` (pi lanes) runs the lane under `~/.pi/agent-<name>` — shared auth/models by symlink, own settings/extensions (e.g. a lean profile for models that choke on heavy extensions).
+`herd spawn` (syntax in the lifecycle block below) bakes in the verified per-kind launch flags (single source: `KIND_ARGS` in `bin/herd`) — approvals and sandboxing are set at launch so routine dialogs are prevented, and codex gets `--no-alt-screen` (without it completed responses are unrecoverable from scrollback). Workers are visible interactive panes the captain can watch and interrupt. Extra native args go after `--`. `--profile <name>` (pi lanes) runs the lane under `~/.pi/agent-<name>` — shared auth/models by symlink, own settings/extensions (e.g. a lean profile for models that choke on heavy extensions). It combines with `--worktree`: herdr worktree create has no `--env`, so herd makes the git worktree + branch itself and spawns a tab lane into it; land/close behave identically (close removes the worktree via git).
 
 Pi lanes with a `--model` override get verification built into spawn: `"model_verified": true|false` in its JSON against the pane breadcrumb. Send work only on `true`; on `false`, fix in place (`herdr agent prompt <lane> "/model <provider/model>"`), re-check. For claude/codex lanes, confirm the model in the pane banner after any restart — herdr can restore a default model; fix in place rather than respawning.
 
@@ -53,6 +54,7 @@ herd close <lane>                      # closes tab / removes worktree
 **watch** blocks until the lane's token appears as a lone line AND the agent has settled — run one background `herd watch` per lane so each completion wakes you the moment it happens; one finished lane is actionable now. Escalation exits: 2 agent gone, 3 dialog, 4 timeout — all self-notify, so a stalled lane is never silent. On exit 3, answer the dialog yourself (`herdr agent send-keys`), confirm the pane moved, re-attach the watch; only questions you cannot answer go to the captain — zero captain involvement is the bar, zero orchestrator involvement is not. **Watch the lane, never the artifact**: waiting on an output file has no blocked-escape and turns a stuck worker into silence — the only legal waits are `herd watch` and its exit codes.
 
 Every worker prompt carries:
+
 - the whole slice with product-level acceptance, not a method — workers delegate internally as they see fit; implementer lanes may spawn scoped `herd` sub-lanes (Sol for well-specified code, kimi for UI) and own their lifecycle;
 - "For exploration/search subagents use `model: sonnet` — the floor tier; keep your own tier for reasoning and synthesis."
 
@@ -64,7 +66,7 @@ Every worker prompt carries:
 
 Slice count scales with spec surface: a single-domain spec may be one lane; a full-stack spec gets one implementer per domain slice — each a whole vertical slice owned end-to-end including integration; atomizing into tickets produces modules that pass in isolation and no product. Ambiguous scope → impl-fable, which decomposes by spawning Sol sub-lanes rather than implementing first-hand. UI touching backend → frontend-kimi owns through the API it consumes; the backend lane owns providing it. The cross-lane API contract is the orchestrator's to sort out: settle the shape and write it into both slice prompts before sending; arbitrate any drift yourself — never leave it to review-time discovery or lane-to-lane negotiation.
 
-Acceptance is product-level: "the user can do X", never "module Y's tests pass". **Run the final thing yourself** before calling anything done — drive the real UI hands-on with realistic data volumes, and walk anything web-facing at mobile/tablet/desktop widths (390/768/1440). Lane test suites catch what they were written to catch — a 41-assertion real-browser run once still shipped a mobile layout broken at every width.
+Acceptance is product-level: "the user can do X", never "module Y's tests pass". **Run the final thing yourself** before calling anything done — drive the real UI hands-on with realistic data volumes, and walk anything web-facing at mobile/tablet/desktop widths (390/768/1440). Web verification goes through CDP against real Chrome (pi lanes: pi's browser tooling) — Playwright is banned (captain ruling). Lane test suites catch what they were written to catch — a 41-assertion real-browser run once still shipped a mobile layout broken at every width.
 
 **Read-only / evaluation mode** (audit, "what's missing", UX review): route analysis slices per the table, prefix every prompt "READ-ONLY — do not edit, write, or create files", skip the review matrix, synthesize the lanes into one Artifact — findings ranked, evidence as file:line. Teardown still applies.
 

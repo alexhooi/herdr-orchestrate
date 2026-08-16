@@ -308,13 +308,10 @@ def cmd_spawn(argv):
     # --profile <name>: pi lane runs with PI_CODING_AGENT_DIR=~/.pi/agent-<name>
     # (a config dir sharing auth/models/npm with ~/.pi/agent via symlinks but
     # its own settings.json/extensions — e.g. profile "kimi" drops mega-compact).
-    # Tab lanes only: herdr worktree create has no --env.
     env = None
     if profile:
         if kind != "pi":
             die("--profile is pi-only")
-        if use_worktree:
-            die("--profile requires a tab lane (herdr worktree create has no --env)")
         pdir = os.path.expanduser(f"~/.pi/agent-{profile}")
         os.path.isdir(pdir) or die(f"pi profile dir {pdir} does not exist")
         env = f"PI_CODING_AGENT_DIR={pdir}"
@@ -345,7 +342,7 @@ def cmd_spawn(argv):
         pane = mutate(adopt)
         print(json.dumps({"ok": True, "lane": lane, "adopted": True, "pane": pane}))
         return
-    branch = workspace = None
+    branch = workspace = git_wt = None
     base = None
     if use_worktree:
         p = git(cwd, "symbolic-ref", "--short", "HEAD")
@@ -353,17 +350,46 @@ def cmd_spawn(argv):
         if p.returncode != 0 or not base:
             die("project HEAD is detached; check out a branch before "
                 "spawning worktree lanes")
-        # worktree lanes always open their own herdr workspace; HERD_WORKSPACE
-        # applies to tab lanes only
-        rc, d = herdr("worktree", "create", "--cwd", cwd, "--branch", f"lane/{lane}",
-                      "--label", lane, "--no-focus")
-        if rc != 0:
-            die(f"worktree create failed: {d}")
-        res = d["result"]
-        pane = res["root_pane"]["pane_id"]; tab = res["tab"]["tab_id"]
-        wt_path = res["root_pane"]["cwd"]
-        workspace = res["workspace"]["workspace_id"]
         branch = f"lane/{lane}"
+        if env:
+            # herdr worktree create has no --env, so profile worktree lanes
+            # are herd-managed: create the git worktree + branch here, then
+            # spawn a tab lane with the env --cwd'd into it. The ledger's
+            # git_worktree field is what makes close remove it via git;
+            # land needs only branch/base/cwd, which are recorded the same
+            # as for a native worktree lane.
+            git_wt = os.path.realpath(cwd)
+            wt_path = os.path.join(WORKTREES,
+                                   f"{os.path.basename(git_wt)}-{lane}")
+            os.makedirs(WORKTREES, exist_ok=True)
+            have = git(cwd, "show-ref", "--verify", "--quiet",
+                       f"refs/heads/{branch}").returncode == 0
+            wargs = (["worktree", "add", wt_path, branch] if have
+                     else ["worktree", "add", "-b", branch, wt_path])
+            p = git(cwd, *wargs)
+            if p.returncode != 0:
+                die(f"git worktree add failed: {(p.stdout + p.stderr).strip()}")
+            targs = ["tab", "create", "--no-focus", "--label", lane,
+                     "--cwd", wt_path, "--env", env]
+            if WORKSPACE:
+                targs += ["--workspace", WORKSPACE]
+            rc, d = herdr(*targs)
+            if rc != 0:
+                git(git_wt, "worktree", "remove", "--force", wt_path)
+                die(f"tab create failed: {d}")
+            res = d["result"]
+            pane = res["root_pane"]["pane_id"]; tab = res["tab"]["tab_id"]
+        else:
+            # native worktree lanes always open their own herdr workspace;
+            # HERD_WORKSPACE applies to tab lanes only
+            rc, d = herdr("worktree", "create", "--cwd", cwd,
+                          "--branch", branch, "--label", lane, "--no-focus")
+            if rc != 0:
+                die(f"worktree create failed: {d}")
+            res = d["result"]
+            pane = res["root_pane"]["pane_id"]; tab = res["tab"]["tab_id"]
+            wt_path = res["root_pane"]["cwd"]
+            workspace = res["workspace"]["workspace_id"]
     else:
         targs = ["tab", "create", "--no-focus", "--label", lane, "--cwd", cwd]
         if WORKSPACE:
@@ -382,6 +408,8 @@ def cmd_spawn(argv):
                   check=False)
         else:
             herdr("tab", "close", tab, check=False)
+            if git_wt:
+                git(git_wt, "worktree", "remove", "--force", wt_path)
     try:
         pretrust(kind, wt_path)
     except Exception as exc:
@@ -425,6 +453,8 @@ def cmd_spawn(argv):
             time.sleep(3)
     rec = {"kind": kind, "pane": pane, "tab": tab, "cwd": wt_path, "base": base,
            "branch": branch, "workspace": workspace, "state": "queued", "ours": True}
+    if git_wt:
+        rec["git_worktree"] = git_wt
     if profile:
         rec["profile"] = profile
     if model_req:
@@ -606,10 +636,24 @@ def cmd_land(argv):
     led = load()
     rec = led["lanes"].get(lane) or die(f"unknown lane {lane}")
     mode = led.get("ship_mode", "scratch")
-    if mode == "scratch" or not rec.get("branch"):
+    if mode == "scratch":
         print(json.dumps({"ok": True, "lane": lane, "mode": mode,
                           "note": "scratch mode: work is already in the tree"}))
         return
+    if not rec.get("branch"):
+        # merge/pr: a missing worktree record must never look like success —
+        # a silent "ok" here once nearly shipped an unmerged branch
+        br = f"lane/{lane}"
+        exists = git(PROJECT, "show-ref", "--verify", "--quiet",
+                     f"refs/heads/{br}").returncode == 0
+        hint = (f"branch {br} exists in the repo but is not in the ledger — "
+                f"restore the record (herd set {lane} branch={br} base=<base>) "
+                f"and land again, or merge by hand (git merge --no-ff {br})"
+                if exists else
+                f"no branch {br} exists either; this lane never had a "
+                f"worktree, so there is nothing herd can merge")
+        die(f"{mode} ship_mode but lane {lane} has no worktree/branch "
+            f"metadata; refusing to silently skip the merge. {hint}", 4)
     if mode == "pr":
         print(json.dumps({"ok": True, "lane": lane, "mode": "pr",
                           "note": "pr mode: herd does not land locally — have the "
@@ -657,7 +701,7 @@ def cmd_close(argv):
     # `unknown` means herdr can't classify it — that is not settled
     if st not in (None, "idle", "done") and not force:
         die(f"lane {lane} agent is {st}; read its pane first (--force to override)", 4)
-    if (rec.get("workspace") and not force
+    if ((rec.get("workspace") or rec.get("git_worktree")) and not force
             and os.path.isdir(rec.get("cwd", "")) and dirty(rec["cwd"])):
         die(f"lane {lane} worktree has uncommitted work; commit/land it "
             "or --force to discard", 4)
@@ -670,6 +714,14 @@ def cmd_close(argv):
         rc, d = 0, {}
     if rc != 0:
         die(f"close failed: {d}")
+    if rec.get("git_worktree") and rec.get("cwd") and os.path.isdir(rec["cwd"]):
+        # herd-managed worktree (profile lane): remove via git, branch stays
+        # until landed — same contract as a native worktree lane
+        p = git(rec["git_worktree"], "worktree", "remove",
+                *(["--force"] if force else []), rec["cwd"])
+        if p.returncode != 0:
+            die(f"tab closed but git worktree remove failed: "
+                f"{(p.stdout + p.stderr).strip()}")
 
     def apply(led):
         r = led["lanes"][lane]
