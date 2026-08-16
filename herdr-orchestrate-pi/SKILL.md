@@ -31,7 +31,7 @@ Sub-lanes an implementer spawns are namespaced under it (`impl-fable-api-sol-1`)
 
 ## Spawning
 
-`herd spawn` (syntax in the lifecycle block below) bakes in the verified pi launch flags (single source: `KIND_ARGS` in `bin/herd`); `--approve` at launch prevents routine dialogs. Workers are visible interactive panes the captain can watch and interrupt. `--profile <name>` runs the lane under `~/.pi/agent-<name>` — shared auth/models by symlink, own settings/extensions (e.g. a lean profile for models that choke on heavy extensions).
+`herd spawn` (syntax in the lifecycle block below) bakes in the verified pi launch flags (single source: `KIND_ARGS` in `bin/herd`); `--approve` at launch prevents routine dialogs. Workers are visible interactive panes the captain can watch and interrupt. `--profile <name>` runs the lane under `~/.pi/agent-<name>` — shared auth/models by symlink, own settings/extensions (e.g. a lean profile for models that choke on heavy extensions). It combines with `--worktree`: herd makes the git worktree + branch itself and spawns a tab lane into it; land/close behave identically (close removes the worktree via git).
 
 **Model verification is built into spawn**: it confirms the model against pi-powerline's breadcrumb and returns `"model_verified": true|false` in its JSON (waits ~35s for the banner). Send work only on `true`. On `false`, fix in place — `herdr agent prompt <lane> "/model <provider/model>"`, then re-check the breadcrumb. Herdr restores the default model on any restart or restore: fix in place rather than respawning, and re-verify after every restart. Double `--model` flags: last wins (verified 2026-08-16).
 

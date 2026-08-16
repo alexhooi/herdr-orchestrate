@@ -10,3 +10,4 @@
 - Claude panes bury final output under ~45 lines of composer chrome — read with `--lines 60+`.
 - Toast config (`[ui.toast]` in herdr config) is read at server start — editing it mid-session does nothing; `herd notify`'s osascript fallback covers it.
 - Truncated pane report → have the worker write markdown to a temp file and reply with the path.
+- Pi extensions can dirty a worktree AFTER the lane commits (e.g. a deferred pi-lens whole-file reformat). If the committed version is the verified one, discard the post-commit changes — do not re-open the lane for them. (Bitten live 2026-08-16.)

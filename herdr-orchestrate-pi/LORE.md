@@ -7,3 +7,4 @@
 - First-ever spawn into a fresh cwd can time out at agent startup ("timed out waiting for agent startup") and clean itself up — retry the same spawn once before diagnosing. (Bitten live 2026-08-16; retry succeeded.)
 - Toast config (`[ui.toast]` in herdr config) is read at server start — editing it mid-session does nothing; `herd notify`'s osascript fallback covers it.
 - Truncated pane report → have the worker write markdown to a temp file and reply with the path.
+- Pi extensions can dirty a worktree AFTER the lane commits (e.g. a deferred pi-lens whole-file reformat). If the committed version is the verified one, discard the post-commit changes — do not re-open the lane for them. (Bitten live 2026-08-16.)
