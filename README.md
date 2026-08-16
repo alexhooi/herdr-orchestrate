@@ -1,5 +1,9 @@
 # herdr-orchestrate
 
+![Demo: an orchestrator pane drives worker lanes through a full build — spawn, parallel implementation, adversarial review, merge, browser-verified product](demo.gif)
+
+*A real, unattended 20-minute run compressed to 50 seconds: the orchestrator (left workspace) is handed a spec, spawns a Codex backend lane and a Kimi frontend lane, cross-reviews with a Fable lane, triages findings, lands both branches, then drives the shipped UI in a browser before reporting done. No human touched anything between the assignment and the report.*
+
 Two Claude Code skills and one stdlib-Python CLI for running a team of AI coding agents as visible, interruptible terminal panes. Workers are real interactive CLI sessions — Claude Code, OpenAI Codex CLI, pi — in herdr tabs you can watch, scroll, and interrupt. Not headless API calls. The orchestrator routes, triages, and verifies. It never implements. You are contacted for exactly two things: decisions only you can make, and completion.
 
 ## Why panes

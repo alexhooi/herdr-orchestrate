@@ -319,7 +319,7 @@ def cmd_spawn(argv):
         os.path.isdir(pdir) or die(f"pi profile dir {pdir} does not exist")
         env = f"PI_CODING_AGENT_DIR={pdir}"
     alive = live_agents()
-    if lane in alive and alive[lane]["agent"] == kind:
+    if lane in alive and alive[lane].get("agent") == kind:
         a = alive[lane]
         old = load()["lanes"].get(lane) or {}
         acwd = os.path.realpath(a.get("cwd") or "/nonexistent")
