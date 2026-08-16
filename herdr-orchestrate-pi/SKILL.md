@@ -25,15 +25,15 @@ Preflight once per session:
 | `review-fable` | `claude-bridge/claude-fable-5:medium` | reviews sol-implemented work |
 | exploration/scout sub-lanes | `claude-bridge/claude-sonnet-5:medium` | search, recon, read-only fan-out (sonnet is the floor tier) |
 
-Thinking level rides the model id (`:<level>` suffix; explicit `--thinking` also works) — without it a pane runs at pi's `defaultThinkingLevel` (medium). Levels codify the showdown-winning config: high only for the architecture-owning fable implementer; medium elsewhere kept quality parity while winning speed/cost.
+Thinking level rides the model id (`:<level>` suffix; explicit `--thinking` also works) — without it a pane runs at pi's `defaultThinkingLevel` (medium). The tiering is deliberate (showdown-tested): medium lanes matched high on quality while winning speed/cost — keep it.
 
 Sub-lanes an implementer spawns are namespaced under it (`impl-fable-api-sol-1`) and are that lane's to watch, review-route, and tear down — the orchestrator sees only the parent's report. Pi's built-in subagent routing (its role files already map to fable/sol/sonnet/kimi) counts as pi-harness — no herd sub-lane needed.
 
 ## Spawning
 
-`herd spawn` (syntax in the lifecycle block below) bakes in the verified pi launch flags (single source: `KIND_ARGS` in `bin/herd`); `--approve` at launch prevents routine dialogs. Workers are visible interactive panes the captain can watch and interrupt. `--profile <name>` runs the lane under `~/.pi/agent-<name>` — shared auth/models by symlink, own settings/extensions (e.g. a lean profile for models that choke on heavy extensions). It combines with `--worktree`: herd makes the git worktree + branch itself and spawns a tab lane into it; land/close behave identically (close removes the worktree via git).
+`herd spawn` (syntax in the lifecycle block below) bakes in the verified pi launch flags (single source: `KIND_ARGS` in `bin/herd`); `--approve` at launch prevents routine dialogs. Workers are visible interactive panes the captain can watch and interrupt. `--profile <name>` runs the lane under `~/.pi/agent-<name>` — shared auth/models by symlink, own settings/extensions (e.g. a lean profile for models that choke on heavy extensions).
 
-**Model verification is built into spawn**: it confirms the model against pi-powerline's breadcrumb and returns `"model_verified": true|false` in its JSON (waits ~35s for the banner). Send work only on `true`. On `false`, fix in place — `herdr agent prompt <lane> "/model <provider/model>"`, then re-check the breadcrumb. Herdr restores the default model on any restart or restore: fix in place rather than respawning, and re-verify after every restart. Double `--model` flags: last wins (verified 2026-08-16).
+**Model verification is built into spawn**: it confirms the model against pi-powerline's breadcrumb and returns `"model_verified": true|false` in its JSON. Send work only on `true`. On `false`, fix in place — `herdr agent prompt <lane> "/model <provider/model>"`, then re-check the breadcrumb. Herdr restores the default model on any restart or restore: fix in place rather than respawning, and re-verify after every restart.
 
 Spawn lazily on first task; `herd spawn` is idempotent — a live same-kind lane is adopted (also the resume path). Each lane gets its own tab; `--worktree` gives it a managed worktree on branch `lane/<name>` instead.
 
@@ -51,9 +51,9 @@ herd close <lane>                      # closes tab / removes worktree
 
 **spawn** pre-approves the lane so trust dialogs never appear; anything pretrust can't handle falls to the exit-3 path.
 
-**send** appends a unique per-turn `REPORT-END-<hex>` token and verifies delivery (first prompts to fresh workers can get eaten — send detects and resubmits). herd answers no dialog, ever: a blocked lane makes send exit 3 with the pane excerpt — answer it yourself (`herdr agent send-keys <lane> ...`), then resend. Concurrent sends to different lanes are safe.
+**send** appends a unique per-turn `REPORT-END-<hex>` token and verifies delivery. herd answers no dialog, ever: a blocked lane makes send exit 3 with the pane excerpt — answer it yourself (`herdr agent send-keys <lane> ...`), then resend. Concurrent sends to different lanes are safe.
 
-**watch** blocks until the lane's token appears as a lone line AND the agent has settled — run one background `herd watch` per lane so each completion wakes you the moment it happens; one finished lane is actionable now. Escalation exits: 2 agent gone, 3 dialog, 4 timeout — all self-notify, so a stalled lane is never silent. On exit 3, answer the dialog yourself (`herdr agent send-keys`), confirm the pane moved, re-attach the watch; only questions you cannot answer go to the captain — zero captain involvement is the bar, zero orchestrator involvement is not. **Watch the lane, never the artifact**: waiting on an output file has no blocked-escape and turns a stuck worker into silence — the only legal waits are `herd watch` and its exit codes.
+**watch** blocks until the lane's token appears as a lone line AND the agent has settled — run one background `herd watch` per lane so each completion wakes you the moment it happens. Escalation exits: 2 agent gone, 3 dialog, 4 timeout — all self-notify, so a stalled lane is never silent. On exit 3, answer the dialog yourself (`herdr agent send-keys`), confirm the pane moved, re-attach the watch; only questions you cannot answer go to the captain — zero captain involvement is the bar, zero orchestrator involvement is not. **Watch the lane, never the artifact**: waiting on an output file has no blocked-escape and turns a stuck worker into silence — the only legal waits are `herd watch` and its exit codes.
 
 Every worker prompt carries:
 - the whole slice with product-level acceptance, not a method — workers delegate internally as they see fit; implementer lanes may spawn scoped `herd` sub-lanes (all `--kind pi`, roles-table models) or use pi's subagent routing, and own their lifecycle;
@@ -90,7 +90,7 @@ A slice is done when review passes or all remaining findings are backlogged — 
 
 ## Captain contact points
 
-Exactly two kinds: decisions only they can make (unknown dialogs, real worker questions, scope calls), and completion. Both get `herd notify "<title>" --body "<one line>" [--sound done|request]` — toast, falling back to a macOS notification — AND the same message in-channel: notify accompanies, never replaces. Toast config is read at herdr server start — editing it mid-session does nothing.
+Exactly two kinds: decisions only they can make (unknown dialogs, real worker questions, scope calls), and completion. Both get `herd notify "<title>" --body "<one line>" [--sound done|request]` — toast, falling back to a macOS notification — AND the same message in-channel: notify accompanies, never replaces.
 
 ## Status and resume
 
