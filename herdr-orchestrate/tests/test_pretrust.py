@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pretrust is best-effort by decision (see README): handle the two real
+"""Pretrust is best-effort by decision (wiki: herd page): handle the two real
 cases — already trusted (no-op) and entry absent (append) — and SKIP anything
 else so the dialog falls to the exit-3 path. These tests pin that contract."""
 import importlib.machinery

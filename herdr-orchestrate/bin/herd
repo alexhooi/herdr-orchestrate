@@ -8,17 +8,14 @@ import fcntl, json, os, re, secrets, subprocess, sys, tempfile, time, tomllib
 from contextlib import contextmanager
 
 PROJECT = os.environ.get("HERD_PROJECT", os.getcwd())
-WORKSPACE = os.environ.get("HERD_WORKSPACE")  # optional herdr workspace for new lanes
 HERD_DIR = os.path.join(PROJECT, ".herd")
 LEDGER = os.path.join(HERD_DIR, "ledger.json")
 WORKTREES = os.path.expanduser("~/.herdr/worktrees")
+WORKSPACE = os.environ.get("HERD_WORKSPACE")  # optional herdr workspace for new lanes
 SEVERITIES = {"disastrous", "architectural", "blocking", "major", "minor", "nit"}
 HANDBACK_SEVS = {"disastrous", "architectural", "blocking"}
 LANDABLE = {"reviewed", "done", "user-review"}
 
-# Our verified roster — edit models/flags to your own setup. SKILL.md relies
-# on the *consequences* (no approval dialogs, no alt-screen), not these exact
-# model IDs.
 KIND_ARGS = {
     "claude": ["--model", "claude-fable-5", "--effort", "high",
                "--permission-mode", "bypassPermissions"],
@@ -182,8 +179,9 @@ def _install(path, tmp, st):
     """Stat-gated atomic replace. True = committed; False = the file changed
     since it was read — caller re-reads and retries. The gate leaves the
     stat->rename microsecond window open to lockless external writers; herd
-    accepts that residual by decision — the fully-hardened detect-and-repair
-    rename-exchange version this replaced is described in HISTORY.md."""
+    accepts that residual by decision (wiki: herd page, pretrust
+    simplification) — the full detect-and-repair rename-exchange machinery
+    this replaced lives in git history (commit a353018 and its tests)."""
     if st is None:
         try:
             os.link(tmp, path)  # creation that cannot clobber a racing creator
@@ -204,7 +202,7 @@ def pretrust(kind, cwd):
     never appears — the same eliminate-at-source move as `-a never`. pi is
     handled by its --approve launch flag.
 
-    Best-effort BY DECISION (see README): only the two real cases are
+    Best-effort BY DECISION (wiki: herd page): only the two real cases are
     handled — already trusted (no-op) and entry absent (append, which never
     touches existing bytes). Anything else — entry present but untrusted,
     unparseable config — is SKIPPED silently; the dialog then falls to the
@@ -412,8 +410,11 @@ def cmd_spawn(argv):
             if a == "--model" and j + 1 < len(kargs):
                 model_req = kargs[j + 1]  # last one wins, matching pi itself
     if model_req:
+        # pi accepts "--model <id>:<thinking>"; the breadcrumb shows only the
+        # model (thinking renders abbreviated, e.g. medium -> "med"), so strip
+        # the suffix before deriving expected tokens
         want = [t for t in re.split(r"[^a-z0-9]+",
-                model_req.rsplit("/", 1)[-1].lower()) if t]
+                model_req.rsplit("/", 1)[-1].split(":", 1)[0].lower()) if t]
         deadline = time.time() + 35  # banners can take 20-30s to render
         model_ok = False
         while time.time() < deadline:

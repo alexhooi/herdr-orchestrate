@@ -53,10 +53,10 @@ Tests: `python3 -m pytest herdr-orchestrate/tests/`
 
 ## The two skills
 
-- `herdr-orchestrate/` — the master-orchestrator skill. SKILL.md carries the doctrine; `bin/herd` enforces it.
-- `herdr-orchestrate-pi/` — same doctrine, every worker lane on the pi harness with the model chosen per role. pi fronts Anthropic, OpenAI, Moonshot, and others.
+- `herdr-orchestrate/` — the master-orchestrator skill for mixed native harnesses. SKILL.md carries the doctrine; `bin/herd` enforces it; `LORE.md` holds the failure lore, read on demand.
+- `herdr-orchestrate-pi/` — a standalone rewrite of the same doctrine with every worker lane on the pi harness, model chosen per role and the thinking level riding the model id (`provider/model:level`). Architecture-owning implementer runs high; everything else runs medium — the tiering that won our benchmark. pi fronts Anthropic, OpenAI, Moonshot, and others.
 
-Battle-tested via a same-spec double-build showdown: native harnesses versus all-pi seats, independent scorecards. HISTORY.md holds the war stories.
+Battle-tested via a same-spec double-build showdown: native harnesses versus all-pi seats, independent scorecards. The pi side won on speed, cost, and maintainability — while accidentally running most lanes at medium thinking, which is why the tiering is now deliberate. HISTORY.md holds the war stories.
 
 ## License
 
