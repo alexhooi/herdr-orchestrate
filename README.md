@@ -16,7 +16,7 @@
 
 *Same Splitwise-lite spec, every lane in the pi harness instead: a Sol backend lane, a Kimi UI lane, batch cross-review, and a `review-ui` Sol lane that drives the real browser at 390/768/1440 before the orchestrator lands both branches and cleans up. 26 minutes of real time cut to 50 seconds.*
 
-Two Claude Code orchestrator skills, a shared iOS/UI drill skill, and one stdlib-Python CLI for running a team of AI coding agents as visible, interruptible terminal panes. Workers are real interactive CLI sessions — Claude Code, OpenAI Codex CLI, pi — in herdr tabs you can watch, scroll, and interrupt. Not headless API calls. The orchestrator routes, triages, and verifies. It never implements. You are contacted for exactly two things: decisions only you can make, and completion.
+Two Claude Code orchestrator skills and one stdlib-Python CLI for running a team of AI coding agents as visible, interruptible terminal panes. Workers are real interactive CLI sessions — Claude Code, OpenAI Codex CLI, pi — in herdr tabs you can watch, scroll, and interrupt. Not headless API calls. The orchestrator routes, triages, and verifies. It never implements. You are contacted for exactly two things: decisions only you can make, and completion.
 
 ## Why panes
 
@@ -48,7 +48,7 @@ Each of these was earned by a failure. HISTORY.md has the full record.
 
 2. **Watch the lane, never the artifact.** The only legal wait is `herd watch` — background, one per lane. It detects a unique per-turn REPORT-END sentinel plus settled agent state, and self-notifies on every escalation: agent gone, dialog, timeout. It also nudges an idle lane once if compaction ate its report footer, and accepts a review lane's findings file as completion in its own right. Polling an output file turns a stuck worker into silence.
 
-3. **Reviews arrive as data.** `herd send --review` points reviewers at a findings JSON file (severity, file, line, symptom, fix_hint). `herd triage` returns blocking findings to the owning lane verbatim and backlogs the rest. Cross-review matrix: each model's work is reviewed by a different model. UI work gets its own reviewer, `review-ui`: it drives the real UI — simulator (`ios-sim-drill` skill) or browser, every width — before the captain ever sees it.
+3. **Reviews arrive as data.** `herd send --review` points reviewers at a findings JSON file (severity, file, line, symptom, fix_hint). `herd triage` returns blocking findings to the owning lane verbatim and backlogs the rest. Cross-review matrix: each model's work is reviewed by a different model. UI work gets its own reviewer, `review-ui`: it drives the real UI — simulator or browser, every width — before the captain ever sees it.
 
 4. **Ship modes per project.** `scratch`: in-tree. `merge`: worktree lanes on `lane/<name>` branches, review-gated `herd land --no-ff`, conflicts handed back to the owning lane. `pr`: the lane pushes and opens the PR — note `herd land` refuses to land locally in this mode and does *not* enforce the review gate; the PR review is the gate.
 
@@ -63,7 +63,7 @@ Each of these was earned by a failure. HISTORY.md has the full record.
 ## Install
 
 - `brew install herdr`. Put the CLIs you plan to use on PATH: `claude`, `codex`, `pi`.
-- Clone this repo into `~/.claude/skills/` so all three skill dirs are siblings (or copy the dirs in individually).
+- Clone this repo into `~/.claude/skills/` so both skill dirs are siblings (or copy the dirs in individually).
 - Edit `KIND_ARGS` at the top of `herdr-orchestrate/bin/herd` to your own model roster and flags. The shipped ones are the authors': Codex → gpt-5.6-sol, pi → Kimi K3 via Moonshot, claude → Fable 5.
 - In a herdr pane with `HERDR_ENV=1`, tell Claude Code to orchestrate a spec. The skill does the rest.
 
@@ -73,7 +73,6 @@ Tests: `python3 -m pytest herdr-orchestrate/tests/`
 
 - `herdr-orchestrate/` — the master-orchestrator skill for mixed native harnesses. SKILL.md carries the doctrine; `bin/herd` enforces it; `LORE.md` holds the failure lore, read on demand.
 - `herdr-orchestrate-pi/` — a standalone rewrite of the same doctrine with every worker lane on the pi harness, model chosen per role and the thinking level riding the model id (`provider/model:level`). Architecture-owning implementer runs high; everything else runs medium — the tiering that won our benchmark. pi fronts Anthropic, OpenAI, Moonshot, and others.
-- `ios-sim-drill/` — a shared, explicitly-invoked drill for exercising an iOS build in Simulator: build/install/launch, timed UI exercise, screenshots, memory ceiling, teardown. Both orchestrator skills route iOS/UI review through it.
 
 Battle-tested via a same-spec double-build showdown: native harnesses versus all-pi seats, independent scorecards. The pi side won on speed, cost, and maintainability — while accidentally running most lanes at medium thinking, which is why the tiering is now deliberate. HISTORY.md holds the war stories.
 

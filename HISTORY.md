@@ -68,9 +68,7 @@ cwd handling (refuses to ledger a lane in `$HOME`) and `herd close` gained
 
 UI review got its own lane, `review-ui`: it drives the shipped UI directly —
 simulator or browser — before the captain ever sees it, rather than trusting
-a text-only diff review. The `ios-sim-drill` skill (new in this repo) is the
-shared drill both orchestrator skills route iOS/UI work through: build,
-install, timed interaction, screenshots, memory ceiling, teardown.
+a text-only diff review.
 
 Teardown itself got promoted from convention to doctrine: every lane cleans
 up what it opened, and the orchestrator runs a machine-clean sweep — booted

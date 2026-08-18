@@ -24,7 +24,7 @@ Preflight once per session:
 | `frontend-kimi` | `moonshotai/kimi-k3:high` | all UI, any platform (web, SwiftUI/native), design |
 | `review-sol` | `openai-codex/gpt-5.6-sol:medium` | reviews fable-implemented work |
 | `review-fable` | `claude-bridge/claude-fable-5:medium` | reviews sol-implemented work |
-| `review-ui` | `openai-codex/gpt-5.6-sol:medium` | reviews frontend-kimi work by DRIVING it — sim drill (`ios-sim-drill`) / browser — Sol is the specialist UI reviewer (captain ruling 2026-08-19) |
+| `review-ui` | `openai-codex/gpt-5.6-sol:medium` | reviews frontend-kimi work by DRIVING it — real browser or simulator, never a text-only diff — Sol is the specialist UI reviewer |
 | exploration/scout sub-lanes | `claude-bridge/claude-sonnet-5:medium` | search, recon, read-only fan-out (sonnet is the floor tier) |
 
 Thinking level rides the model id (`:<level>` suffix; explicit `--thinking` also works) — without it a pane runs at pi's `defaultThinkingLevel` (medium). The tiering is deliberate (showdown-tested): medium lanes matched high on quality while winning speed/cost — keep it. Exception: kimi runs `:high` (owner call, 2026-08-17).
@@ -84,10 +84,10 @@ Acceptance is product-level: "the user can do X", never "module Y's tests pass".
 
 ## Review matrix and bug loop
 
-iOS/UI slices must pass the sim drill (`ios-sim-drill` skill) before review; AR/camera slices also need a device drill.
+UI slices are driven for real before review — browser for web, simulator for native (an AR/camera slice also needs a physical-device pass).
 
 - impl-fable done → review-sol gets the branch/diff; impl-sol done → review-fable. **Parallel implementers: hold review until ALL batch lanes have reported, then ONE review pass over the combined diff** — the whole slice at once is what gives the reviewer blast-radius judgment for cuts. Cross-model: pick the reviewer opposite the model that wrote most of the batch. Reviewers are tab lanes, no `--worktree` — the branch diff is visible from the project repo. Adversarial: refute-first, actionable findings only. Reviewer independence: a reviewer never also gets its sibling implementer's work in the same task.
-- frontend-kimi done → **reviewed before the captain ever sees it** by a `review-ui` lane (Sol) armed with the spec — it DRIVES the real UI (sim drill for iOS, browser for web): flows, validation, empty/error states, every viewport width, realistic data; findings arrive via `herd send --review`. The orchestrator reviews personally only when no Sol lane is available (it holds the product context). When the pass is clean, `herd set frontend-kimi state=reviewed` (landing needs it), then present what shipped (screenshot/URL/diff) for taste-level judgment; the captain is never the one to report "text box overflows on mobile." Other lanes don't gate on it.
+- frontend-kimi done → **reviewed before the captain ever sees it** by a `review-ui` lane (Sol) armed with the spec — it DRIVES the real UI (browser for web, simulator for native): flows, validation, empty/error states, every viewport width, realistic data; findings arrive via `herd send --review`. The orchestrator reviews personally only when no Sol lane is available (it holds the product context). When the pass is clean, `herd set frontend-kimi state=reviewed` (landing needs it), then present what shipped (screenshot/URL/diff) for taste-level judgment; the captain is never the one to report "text box overflows on mobile." Other lanes don't gate on it.
 - `herd send --review` makes findings arrive as data in `.herd/findings-<lane>-N.json` (herd gives the reviewer the format) — no finding is transcribed by hand.
 - `herd triage <findings.json> --backlog <file>`: disastrous/architectural/blocking findings print for handback (send to the implementing lane verbatim, scoped re-review after the fix); the rest append to the backlog (project tracker or your own todo file) without interrupting anyone.
 
@@ -107,7 +107,7 @@ A fresh session resumes from the ledger: re-adopt live lanes with `herd spawn <l
 
 ## Teardown
 
-**Etiquette — every lane cleans up what it opened before it reports done**, and the orchestrator verifies before `herd close`: browser tabs/windows/instances it launched (never the captain's own Chrome), booted simulators it booted, dev servers, log tails, recordings, iPhone Mirroring/Mirroir sessions, background jobs, scratch files outside `.herd/`. The `ios-sim-drill` skill carries the sim teardown recipe. The captain must never come back to ten Chrome instances and a running sim. Gotcha: `osascript … tell application "X"` LAUNCHES X if it isn't running — `pgrep -x` first. **Machine-clean sweep is the orchestrator's last act before the final report** — lanes cleaning up is necessary, not sufficient; you own the end state. Run it and put the result in the report:
+**Etiquette — every lane cleans up what it opened before it reports done**, and the orchestrator verifies before `herd close`: browser tabs/windows/instances it launched (never the captain's own Chrome), booted simulators it booted, dev servers, log tails, recordings, device-mirroring sessions, background jobs, scratch files outside `.herd/`. The captain must never come back to ten Chrome instances and a running sim. Gotcha: `osascript … tell application "X"` LAUNCHES X if it isn't running — `pgrep -x` first. **Machine-clean sweep is the orchestrator's last act before the final report** — lanes cleaning up is necessary, not sufficient; you own the end state. Run it and put the result in the report:
 
 ```bash
 xcrun simctl list devices booted | grep -c Booted        # 0, or shut down what a lane booted (`xcrun simctl shutdown <udid>`)
