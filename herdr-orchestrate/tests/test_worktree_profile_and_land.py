@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""Pins two fixes:
-
-1. `spawn --kind pi --worktree --profile <name>` works: herd creates the git
-   worktree + branch itself (herdr worktree create has no --env), spawns a
-   tab lane with the profile env --cwd'd into it, and records real worktree
-   metadata (branch/base/cwd/git_worktree) so land and close behave like a
-   native worktree lane; close removes the worktree via git.
-
-2. `land` never silently no-ops: in merge/pr ship_mode a lane without
-   worktree/branch metadata dies loudly (exit 4) instead of returning ok.
-"""
 import contextlib
 import io
 import json
@@ -51,6 +40,10 @@ class HerdBase(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.repo = make_repo(root / "proj")
         self.herd = load_herd()
+        # revision only matters to watch quiet-detection; tests opt in
+        p = mock.patch.object(self.herd, "agent_revision", lambda *a: None)
+        p.start()
+        self.addCleanup(p.stop)
         for attr, val in [("PROJECT", str(self.repo)),
                           ("HERD_DIR", str(self.repo / ".herd")),
                           ("LEDGER", str(self.repo / ".herd" / "ledger.json")),
@@ -71,7 +64,7 @@ class SpawnProfileWorktree(HerdBase):
         (Path(os.environ["HOME"]) / ".pi" / "agent-test").mkdir(parents=True)
         self.calls = []
 
-        def fake_herdr(*args, check=True):
+        def fake_herdr(*args):
             self.calls.append(args)
             if args[:2] == ("tab", "create"):
                 return 0, {"result": {"root_pane": {"pane_id": "p1"},
@@ -109,6 +102,17 @@ class SpawnProfileWorktree(HerdBase):
                          "PI_CODING_AGENT_DIR="
                          + os.path.expanduser("~/.pi/agent-test"))
         self.assertEqual(tab[tab.index("--cwd") + 1], str(wt))
+
+    def test_adopted_rebound_pane_is_not_ours(self):
+        self.write_ledger({"ship_mode": "scratch", "lanes": {
+            "lane": {"kind": "pi", "state": "done", "ours": True,
+                     "pane": "old-pane", "cwd": str(self.repo)}}})
+        live = {"lane": {"agent": "pi", "pane_id": "new-pane",
+                         "tab_id": "new-tab", "cwd": str(self.repo)}}
+        with mock.patch.object(self.herd, "live_agents", return_value=live), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.herd.cmd_spawn(["lane", "--kind", "pi"])
+        self.assertFalse(self.read_ledger()["lanes"]["lane"]["ours"])
 
     def test_close_removes_git_worktree(self):
         self.spawn()
@@ -150,13 +154,6 @@ class LandGate(HerdBase):
         code, out, err = self.land("ghost")
         self.assertEqual(code, 4)
         self.assertNotIn('"ok": true', out)
-        self.assertIn("refusing to silently skip", err)
-
-    def test_pr_mode_branchless_lane_dies(self):
-        self.write_ledger({"ship_mode": "pr", "lanes": {
-            "ghost": {"kind": "pi", "state": "reviewed"}}})
-        code, out, err = self.land("ghost")
-        self.assertEqual(code, 4)
         self.assertIn("refusing to silently skip", err)
 
     def test_unrecorded_but_existing_branch_named_in_error(self):

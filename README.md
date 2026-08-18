@@ -4,7 +4,13 @@
 
 *A real, unattended 20-minute run compressed to 50 seconds: the orchestrator (left workspace) is handed a spec, spawns a Codex backend lane and a Kimi frontend lane, cross-reviews with a Fable lane, triages findings, lands both branches, then drives the shipped UI in a browser before reporting done. No human touched anything between the assignment and the report.*
 
-Two Claude Code skills and one stdlib-Python CLI for running a team of AI coding agents as visible, interruptible terminal panes. Workers are real interactive CLI sessions — Claude Code, OpenAI Codex CLI, pi — in herdr tabs you can watch, scroll, and interrupt. Not headless API calls. The orchestrator routes, triages, and verifies. It never implements. You are contacted for exactly two things: decisions only you can make, and completion.
+## All-pi demo
+
+![all-pi demo](demo-pi.gif)
+
+*Same Splitwise-lite spec, every lane in the pi harness instead: a Sol backend lane, a Kimi UI lane, batch cross-review, and a `review-ui` Sol lane that drives the real browser at 390/768/1440 before the orchestrator lands both branches and cleans up. 26 minutes of real time cut to 50 seconds.*
+
+Two Claude Code orchestrator skills, a shared iOS/UI drill skill, and one stdlib-Python CLI for running a team of AI coding agents as visible, interruptible terminal panes. Workers are real interactive CLI sessions — Claude Code, OpenAI Codex CLI, pi — in herdr tabs you can watch, scroll, and interrupt. Not headless API calls. The orchestrator routes, triages, and verifies. It never implements. You are contacted for exactly two things: decisions only you can make, and completion.
 
 ## Why panes
 
@@ -26,7 +32,7 @@ herd land           # review-gated --no-ff merge, conflicts handed back
 herd close          # retire the lane
 ```
 
-`status`, `set`, and `notify` cover the remaining orchestrator intents.
+`status`, `set`, and `notify` cover the remaining orchestrator intents. Spawn refuses to ledger a lane in `$HOME` and auto-gitignores `.herd/` in the project root; `herd close --integrated` retires a worktree lane whose files the parent already folded in.
 
 ## Design points
 
@@ -34,31 +40,34 @@ Each of these was earned by a failure. HISTORY.md has the full record.
 
 1. **Dialog doctrine.** herd matches no dialog text, ever. Five adversarial review rounds refuted every screen-scrape classifier. Dialogs are prevented at launch (approval flags, sandbox flags, pre-seeded folder trust). Whatever still appears fails closed: exit 3, pane excerpt, notification. The orchestrator answers by hand.
 
-2. **Watch the lane, never the artifact.** The only legal wait is `herd watch` — background, one per lane. It detects a unique per-turn REPORT-END sentinel plus settled agent state, and self-notifies on every escalation: agent gone, dialog, timeout. Polling an output file turns a stuck worker into silence.
+2. **Watch the lane, never the artifact.** The only legal wait is `herd watch` — background, one per lane. It detects a unique per-turn REPORT-END sentinel plus settled agent state, and self-notifies on every escalation: agent gone, dialog, timeout. It also nudges an idle lane once if compaction ate its report footer, and accepts a review lane's findings file as completion in its own right. Polling an output file turns a stuck worker into silence.
 
-3. **Reviews arrive as data.** `herd send --review` points reviewers at a findings JSON file (severity, file, line, symptom, fix_hint). `herd triage` returns blocking findings to the owning lane verbatim and backlogs the rest. Cross-review matrix: each model's work is reviewed by a different model.
+3. **Reviews arrive as data.** `herd send --review` points reviewers at a findings JSON file (severity, file, line, symptom, fix_hint). `herd triage` returns blocking findings to the owning lane verbatim and backlogs the rest. Cross-review matrix: each model's work is reviewed by a different model. UI work gets its own reviewer, `review-ui`: it drives the real UI — simulator (`ios-sim-drill` skill) or browser, every width — before the captain ever sees it.
 
 4. **Ship modes per project.** `scratch`: in-tree. `merge`: worktree lanes on `lane/<name>` branches, review-gated `herd land --no-ff`, conflicts handed back to the owning lane. `pr`: the lane pushes and opens the PR — note `herd land` refuses to land locally in this mode and does *not* enforce the review gate; the PR review is the gate.
 
-5. **Vertical slices, not tickets.** One implementer per domain slice, product-level acceptance ("the user can do X"). The orchestrator personally drives the final product before calling it done — including web UI at 390/768/1440 widths with realistic data.
+5. **Vertical slices, not tickets.** One implementer per domain slice, product-level acceptance ("the user can do X"). Kimi owns all UI on any platform — web, SwiftUI, native. The orchestrator personally drives the final product before calling it done — including web UI at 390/768/1440 widths with realistic data.
 
 6. **Resume.** The ledger survives orchestrator death. A fresh session adopts live lanes idempotently and re-attaches watches. Verified with a literal SIGKILL drill.
 
 7. **Pretrust.** Spawn pre-seeds codex/claude folder-trust stores so trust dialogs don't appear. Deliberately best-effort: two cases, already trusted or entry absent. It was once 430 adversarially-hardened lines with a byte-safe TOML rewriter and renamex_np race detection. We deleted it after pricing the failure mode: a dialog, once, already handled. HISTORY.md tells that story.
 
+8. **Teardown etiquette.** Every lane cleans up what it opened — browser tabs, booted simulators, dev servers, log tails — before it reports done, and the orchestrator runs a machine-clean sweep as its own last act. A run isn't done while any of it is still up.
+
 ## Install
 
 - `brew install herdr`. Put the CLIs you plan to use on PATH: `claude`, `codex`, `pi`.
-- Clone this repo into `~/.claude/skills/` so both skill dirs are siblings (or copy the two dirs in).
+- Clone this repo into `~/.claude/skills/` so all three skill dirs are siblings (or copy the dirs in individually).
 - Edit `KIND_ARGS` at the top of `herdr-orchestrate/bin/herd` to your own model roster and flags. The shipped ones are the authors': Codex → gpt-5.6-sol, pi → Kimi K3 via Moonshot, claude → Fable 5.
 - In a herdr pane with `HERDR_ENV=1`, tell Claude Code to orchestrate a spec. The skill does the rest.
 
 Tests: `python3 -m pytest herdr-orchestrate/tests/`
 
-## The two skills
+## The skills
 
 - `herdr-orchestrate/` — the master-orchestrator skill for mixed native harnesses. SKILL.md carries the doctrine; `bin/herd` enforces it; `LORE.md` holds the failure lore, read on demand.
 - `herdr-orchestrate-pi/` — a standalone rewrite of the same doctrine with every worker lane on the pi harness, model chosen per role and the thinking level riding the model id (`provider/model:level`). Architecture-owning implementer runs high; everything else runs medium — the tiering that won our benchmark. pi fronts Anthropic, OpenAI, Moonshot, and others.
+- `ios-sim-drill/` — a shared, explicitly-invoked drill for exercising an iOS build in Simulator: build/install/launch, timed UI exercise, screenshots, memory ceiling, teardown. Both orchestrator skills route iOS/UI review through it.
 
 Battle-tested via a same-spec double-build showdown: native harnesses versus all-pi seats, independent scorecards. The pi side won on speed, cost, and maintainability — while accidentally running most lanes at medium thinking, which is why the tiering is now deliberate. HISTORY.md holds the war stories.
 

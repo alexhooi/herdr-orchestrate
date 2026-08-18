@@ -56,3 +56,28 @@ mobile/tablet/desktop widths with realistic data before calling anything done
 width), and frontend work is reviewed against the spec before the captain ever
 sees it. The pi-variant skill (`herdr-orchestrate-pi/`) also exists because of
 this run.
+
+## 2026-08-19: showdown round 2, ops hardening
+
+A second showdown round surfaced live-ops gaps rather than design flaws: watch
+now nudges an idle lane once when compaction eats its report footer, and
+accepts a review lane's findings file as completion in its own right — neither
+failure mode is a hang, so neither should read as one. Spawn hardened its
+cwd handling (refuses to ledger a lane in `$HOME`) and `herd close` gained
+`--integrated` for a worktree lane whose files the parent already folded in.
+
+UI review got its own lane, `review-ui`: it drives the shipped UI directly —
+simulator or browser — before the captain ever sees it, rather than trusting
+a text-only diff review. The `ios-sim-drill` skill (new in this repo) is the
+shared drill both orchestrator skills route iOS/UI work through: build,
+install, timed interaction, screenshots, memory ceiling, teardown.
+
+Teardown itself got promoted from convention to doctrine: every lane cleans
+up what it opened, and the orchestrator runs a machine-clean sweep — booted
+simulators, dev servers, stray browser processes — as its own last act before
+reporting done. A run that leaves the machine dirty isn't done.
+
+A bloat pass followed: cut speculative flags, one-caller helpers, and slop
+tests that pinned implementation rather than product behavior. Closed with a
+fresh all-pi demo run of the same Splitwise-lite spec, this time exercising
+the hardened watch/close paths and the new `review-ui` lane end to end.

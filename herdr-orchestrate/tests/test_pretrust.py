@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pretrust is best-effort by decision (wiki: herd page): handle the two real
+"""Pretrust is best-effort by decision (see LORE.md): handle the two real
 cases — already trusted (no-op) and entry absent (append) — and SKIP anything
 else so the dialog falls to the exit-3 path. These tests pin that contract."""
 import importlib.machinery
@@ -21,6 +21,7 @@ def load_herd():
     name = f"herd_test_{os.getpid()}_{time.time_ns()}"
     loader = importlib.machinery.SourceFileLoader(name, str(HERD_PATH))
     spec = importlib.util.spec_from_loader(name, loader)
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
