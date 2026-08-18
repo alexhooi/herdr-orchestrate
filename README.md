@@ -4,6 +4,12 @@
 
 *A real, unattended 20-minute run compressed to 50 seconds: the orchestrator (left workspace) is handed a spec, spawns a Codex backend lane and a Kimi frontend lane, cross-reviews with a Fable lane, triages findings, lands both branches, then drives the shipped UI in a browser before reporting done. No human touched anything between the assignment and the report.*
 
+## How it works — 55 seconds
+
+![How herdr-orchestrate works: captain → one orchestrator pane → visible worker lanes; roles; the implement/watch loop; batch review → triage → land → verify; guardrails; machine-clean sweep](explainer.gif)
+
+*The mechanics as an evolving system picture: the captain hands a spec to one orchestrator pane; workers are real CLIs in visible panes; `herd send` mints a report token, `herd watch` runs in the background (a lone-line token, a nudge, or a reviewer's findings file all count as done); review happens once, after every implementer reports, cross-model, with a `review-ui` lane driving the real UI; `herd land` gates on review; the orchestrator runs the product itself, sweeps the machine clean, and reports. ([mp4](explainer.mp4))*
+
 ## All-pi demo
 
 ![all-pi demo](demo-pi.gif)
