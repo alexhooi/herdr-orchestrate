@@ -1,20 +1,14 @@
 # herdr-orchestrate
 
-![Demo: an orchestrator pane drives worker lanes through a full build — spawn, parallel implementation, adversarial review, merge, browser-verified product](demo.gif)
+![Demo: an all-pi herdr-orchestrate run — Sol backend lane, Kimi UI lane, batch cross-review, a review-ui lane driving the real browser, land, clean up](demo-pi.gif)
 
-*A real, unattended 20-minute run compressed to 50 seconds: the orchestrator (left workspace) is handed a spec, spawns a Codex backend lane and a Kimi frontend lane, cross-reviews with a Fable lane, triages findings, lands both branches, then drives the shipped UI in a browser before reporting done. No human touched anything between the assignment and the report.*
+*A real, unattended 26-minute run compressed to 50 seconds: the orchestrator is handed a spec, spawns a Sol backend lane and a Kimi UI lane, runs one batch cross-review after both report, has a `review-ui` Sol lane drive the real browser at 390/768/1440, lands both branches, sweeps the machine clean, and reports. No human touched anything between the assignment and the report.*
 
 ## How it works — 55 seconds
 
 ![How herdr-orchestrate works: captain → one orchestrator pane → visible worker lanes; roles; the implement/watch loop; batch review → triage → land → verify; guardrails; machine-clean sweep](explainer.gif)
 
 *The mechanics as an evolving system picture: the captain hands a spec to one orchestrator pane; workers are real CLIs in visible panes; `herd send` mints a report token, `herd watch` runs in the background (a lone-line token, a nudge, or a reviewer's findings file all count as done); review happens once, after every implementer reports, cross-model, with a `review-ui` lane driving the real UI; `herd land` gates on review; the orchestrator runs the product itself, sweeps the machine clean, and reports. ([mp4](explainer.mp4))*
-
-## All-pi demo
-
-![all-pi demo](demo-pi.gif)
-
-*Same Splitwise-lite spec, every lane in the pi harness instead: a Sol backend lane, a Kimi UI lane, batch cross-review, and a `review-ui` Sol lane that drives the real browser at 390/768/1440 before the orchestrator lands both branches and cleans up. 26 minutes of real time cut to 50 seconds.*
 
 Two Claude Code orchestrator skills and one stdlib-Python CLI for running a team of AI coding agents as visible, interruptible terminal panes. Workers are real interactive CLI sessions — Claude Code, OpenAI Codex CLI, pi — in herdr tabs you can watch, scroll, and interrupt. Not headless API calls. The orchestrator routes, triages, and verifies. It never implements. You are contacted for exactly two things: decisions only you can make, and completion.
 
