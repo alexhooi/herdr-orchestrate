@@ -69,7 +69,7 @@ Each of these was earned by a failure. HISTORY.md has the full record.
 
 Tests: `python3 -m pytest herdr-orchestrate/tests/`
 
-## The skills
+## The two skills
 
 - `herdr-orchestrate/` — the master-orchestrator skill for mixed native harnesses. SKILL.md carries the doctrine; `bin/herd` enforces it; `LORE.md` holds the failure lore, read on demand.
 - `herdr-orchestrate-pi/` — a standalone rewrite of the same doctrine with every worker lane on the pi harness, model chosen per role and the thinking level riding the model id (`provider/model:level`). Architecture-owning implementer runs high; everything else runs medium — the tiering that won our benchmark. pi fronts Anthropic, OpenAI, Moonshot, and others.
