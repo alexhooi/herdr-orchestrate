@@ -1,8 +1,22 @@
 # herdr-orchestrate
 
+**Run a team of AI coding agents — Claude Code, Codex CLI, pi — as visible terminal panes you can watch, scroll, and interrupt. One orchestrator routes, reviews, merges. You get pinged twice: for a decision only you can make, and when it's done.**
+
 ![Demo: an all-pi herdr-orchestrate run — Sol backend lane, Kimi UI lane, batch cross-review, a review-ui lane driving the real browser, land, clean up](demo-pi.gif)
 
-*A real, unattended 26-minute run compressed to 50 seconds: the orchestrator is handed a spec, spawns a Sol backend lane and a Kimi UI lane, runs one batch cross-review after both report, has a `review-ui` Sol lane drive the real browser at 390/768/1440, lands both branches, sweeps the machine clean, and reports. No human touched anything between the assignment and the report.*
+*Real unattended 26-minute run, cut to 50 seconds: spec in → Sol backend lane + Kimi UI lane → one cross-model review after both report → a `review-ui` lane drives the real browser at 390/768/1440 → land both branches → machine-clean sweep → report. No human touched anything between the assignment and the report.*
+
+```sh
+brew install herdr                  # terminal agent multiplexer; put claude / codex / pi on PATH
+git clone https://github.com/alexkalinohooijunyi/herdr-orchestrate ~/.claude/skills/herdr-orchestrate
+# in a herdr pane running Claude Code: hand it a spec and say "orchestrate this"
+```
+
+Two Claude Code orchestrator skills + `herd`, a ~700-line stdlib-Python CLI. No framework, no SDK, no daemon. Workers are real interactive CLI sessions in herdr tabs — not headless API calls. The orchestrator routes, triages, and verifies. It never implements.
+
+## Why not just subagents?
+
+Subagents are headless. A stuck API call looks identical to a thinking one; a permission dialog is an invisible hang; "done" is whatever the model says. Panes fix all three: the screen is ground truth, you can take the keyboard any time, and `herd watch` waits on a per-turn sentinel plus settled agent state — not a self-report. Subagents still have a place (recon, parallel reads inside one lane); lanes are for work that earns its own pane: implementers, reviewers, anything you'd want to watch or interrupt.
 
 ## How it works — 55 seconds
 
@@ -10,13 +24,11 @@
 
 *The mechanics as an evolving system picture: the captain hands a spec to one orchestrator pane; workers are real CLIs in visible panes; `herd send` mints a report token, `herd watch` runs in the background (a lone-line token, a nudge, or a reviewer's findings file all count as done); review happens once, after every implementer reports, cross-model, with a `review-ui` lane driving the real UI; `herd land` gates on review; the orchestrator runs the product itself, sweeps the machine clean, and reports. ([mp4](explainer.mp4))*
 
-Two Claude Code orchestrator skills and one stdlib-Python CLI for running a team of AI coding agents as visible, interruptible terminal panes. Workers are real interactive CLI sessions — Claude Code, OpenAI Codex CLI, pi — in herdr tabs you can watch, scroll, and interrupt. Not headless API calls. The orchestrator routes, triages, and verifies. It never implements. You are contacted for exactly two things: decisions only you can make, and completion.
-
 ## Why panes
 
 Headless agents fail silently. A stuck API call looks identical to a thinking one. Panes don't have this problem: the agent's screen is ground truth, you can see it, and you can take the keyboard at any moment. Every detection rule in this repo exists because something failed in a way a log file hid. See HISTORY.md.
 
-## How it works
+## Under the hood
 
 Built on [herdr](https://herdr.dev), a terminal agent multiplexer (`brew install herdr`). One orchestrator pane drives worker lanes through `bin/herd`, a ~670-line Python-stdlib CLI: one command per orchestrator intent. State lives in `<project>/.herd/ledger.json`, flock-guarded, and survives orchestrator death.
 
