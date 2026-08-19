@@ -8,7 +8,7 @@
 
 ```sh
 brew install herdr                  # terminal agent multiplexer; put claude / codex / pi on PATH
-git clone https://github.com/alexkalinohooijunyi/herdr-orchestrate ~/.claude/skills/herdr-orchestrate
+git clone https://github.com/alexhooi/herdr-orchestrate ~/.claude/skills/herdr-orchestrate
 # in a herdr pane running Claude Code: hand it a spec and say "orchestrate this"
 ```
 
