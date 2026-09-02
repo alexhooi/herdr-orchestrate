@@ -149,6 +149,68 @@ def read_pane(target, lines=300):
     return text
 
 
+def pi_session_dirs(cwd):
+    """pi's session dir for a cwd (session-manager.js getDefaultSessionDirPath):
+    `--<cwd sans leading slash, / \\ : -> ->--` under <agentDir>/sessions.
+    Every ~/.pi/agent* profile is a candidate."""
+    if not cwd:
+        return []
+    safe = "--" + re.sub(r"[/\\:]", "-", os.path.realpath(cwd).lstrip("/\\")) + "--"
+    root = os.environ.get("HERD_PI_HOME") or os.path.join(os.path.expanduser("~"), ".pi")
+    try:
+        agents = [d for d in os.listdir(root) if d.startswith("agent")]
+    except OSError:
+        return []
+    return [os.path.join(root, a, "sessions", safe) for a in sorted(agents)]
+
+
+def session_report(rec, sentinel, tail_bytes=512_000):
+    """The lane's report as pi persisted it, when the pane can no longer show it.
+    pi-blackhole compacts at agent_end — right after the report turn — and the
+    redraw drops the token from the pane; the session jsonl keeps it. Returns
+    the text of the newest session's last assistant message when that message
+    ends with the lone-line token, else None."""
+    if rec.get("kind") != "pi":
+        return None
+    newest = None
+    for d in pi_session_dirs(rec.get("cwd")):
+        try:
+            for f in os.listdir(d):
+                if f.endswith(".jsonl"):
+                    path = os.path.join(d, f)
+                    m = os.path.getmtime(path)
+                    if newest is None or m > newest[0]:
+                        newest = (m, path)
+        except OSError:
+            continue
+    if not newest:
+        return None
+    try:
+        with open(newest[1], "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - tail_bytes))
+            chunk = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    for line in reversed(chunk.splitlines()):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("type") != "message":
+            continue
+        msg = e.get("message") or {}
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        text = content if isinstance(content, str) else "\n".join(
+            c.get("text", "") for c in (content or [])
+            if isinstance(c, dict) and c.get("type") == "text")
+        return text if sentinel.search(text) else None
+    return None
+
+
 def agent_info(name):
     rc, d = herdr("agent", "get", name)
     return d.get("result", {}).get("agent", {}) if rc == 0 else {}
@@ -797,6 +859,13 @@ def cmd_watch(argv):
                     lane=lane, reason="superseded", tail=tail[-3000:],
                     watched_token=watch["token"], current_token=current_token)
             sentinel_present = bool(watch["sentinel"].search(tail))
+            if not sentinel_present and st != "working":
+                report = session_report(rec, watch["sentinel"])
+                if report:
+                    # compaction redrew the pane over the report; the session
+                    # file is the truth — surface the report as the tail
+                    sentinel_present = True
+                    tail = tail + "\n" + report + "\n"
             if not watch["consumed"] and sentinel_present and st != "working":
                 if finish(lane, watch, st, tail):
                     return
