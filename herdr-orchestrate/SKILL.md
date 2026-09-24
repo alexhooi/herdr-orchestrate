@@ -20,14 +20,17 @@ Preflight once per session:
 | lane name | kind | takes |
 | --- | --- | --- |
 | (this session) | claude | routing, triage, status. NEVER implements or reviews |
-| `impl-fable[-<slice>]` | claude (Fable, high) | owns a slice as its pseudo-orchestrator: architecture, integration, acceptance — spawns its own Sol/kimi sub-lanes for scoped chunks. Fable typing well-specified code itself is a routing smell |
-| `impl-sol[-<slice>]` | codex | scoped, well-specified tasks |
-| `frontend-kimi` | pi (`-- --model moonshotai/kimi-k3:high`) | all UI, any platform (web, SwiftUI/native), design |
-| `review-sol` | codex | reviews fable-implemented work |
-| `review-fable` | claude (Fable) | reviews sol-implemented work |
-| `review-ui` | codex | reviews frontend-kimi work by DRIVING it — real browser or simulator, never a text-only diff — Sol is the specialist UI reviewer |
+| `impl-fable[-<slice>]` | claude (Fable, high) | owns a slice as its pseudo-orchestrator: architecture, integration, acceptance — spawns its own Astra/Opus/kimi sub-lanes for scoped chunks. Fable typing well-specified code itself is a routing smell |
+| `impl-astra[-<slice>]` | pi (`-- --model openai-codex/gpt-6-astra:high`) | scoped, well-specified tasks |
+| `impl-opus[-<slice>]` | claude (`--model claude-opus-5-5 --effort high`) or pi (`-- --model claude-bridge/claude-opus-5-5:high`) | Astra-equivalent: same scoped, well-specified tasks; pick over Astra when codex sandbox/receipts are in the way, or to spread quota |
+| `frontend-kimi` | pi (`-- --model moonshotai/kimi-k3:high`) | design code / frontend ONLY, any platform (web, SwiftUI/native) — never backend or review; assets via the Higgsfield MCP directly |
+| `review-astra` | pi (`-- --model openai-codex/gpt-6-astra:high`) | reviews fable-implemented work (cross-model) |
+| `review-fable` | claude (Fable 5.1, `--model claude-fable-5-1`) | THE code reviewer — reviews astra/opus/kimi-implemented work |
+| `review-opus` | claude (`--model claude-opus-5-5 --effort high`) | Astra-equivalent reviewer: reviews fable-implemented work when no Astra lane is available, or stands in for review-fable on a Fable-limit stall |
+| `review-ui` | pi (`-- --model openai-codex/gpt-6-astra:high`) | reviews frontend-kimi work by DRIVING it — real browser or simulator, never a text-only diff — Astra is the specialist UI reviewer |
+| `scout-*` sub-lanes | claude (`--model claude-sonnet-5`) or pi (`claude-bridge/claude-sonnet-5:medium`) | search, recon, read-only fan-out (sonnet floor, never haiku) |
 
-Two delegation tools, two jobs. Subagents (Claude's Task tool, codex's) *augment* a lane and preserve its context: recon, parallel reads, scoped in-place chunks whose output the lane absorbs. Herd sub-lanes carry work that earns its own pane: observability, review routing, a lifecycle. Sub-lanes an implementer spawns are namespaced under it (`impl-fable-api-sol-1`) and are that lane's to watch, review-route, and tear down — the orchestrator sees only the parent's report. Sub-lane `--cwd` is the project root or a worktree, never a subdirectory (nested `.herd/` = forked ledger, unledgered lane; spawn warns). Codex/sandboxed lanes never own build receipts (`xcodebuild`, SwiftPM manifest resolution write to `~/Library/Caches` — seatbelt blocks it): the orchestrator runs the receipt itself and reviewer briefs pre-declare it as orchestrator-verified.
+**Delegation = herd panes.** pi lanes run without an in-harness subagent tool (drop the pi-subagents extension); a lane that needs help spawns a herd sub-lane and delegates as much as it wants — every helper is an observable pane. Claude lanes may still use Task for read-only recon at sonnet, nothing heavier. Sub-lanes an implementer spawns are namespaced under it (`impl-fable-api-sol-1`) and are that lane's to watch, review-route, and tear down — the orchestrator sees only the parent's report. Sub-lane `--cwd` is the project root or a worktree, never a subdirectory (nested `.herd/` = forked ledger, unledgered lane; spawn warns). Codex/sandboxed lanes never own build receipts (`xcodebuild`, SwiftPM manifest resolution write to `~/Library/Caches` — seatbelt blocks it): the orchestrator runs the receipt itself and reviewer briefs pre-declare it as orchestrator-verified.
 
 ## Spawning
 
@@ -45,6 +48,7 @@ herd send  <lane> --file prompt.md [--state implementing]   # or inline text / s
 herd watch <lane> [--text] --timeout 1200                 # implementing lane
 herd watch --any <lane> <lane> ... [--text] --timeout 600  # first lane wins; reviews ~600s
 herd send  <lane> --review --state review --file review-prompt.md
+herd send  <lane> --refocus      # replay the lane's recorded brief (task→slice→spec intent) after a compaction or drift; keeps the outstanding report token
 herd triage <project>/.herd/findings-<lane>-N.json --backlog <backlog-file> [--promote ID[,ID...]]
 herd land  <lane>                      # honors ship_mode; conflict -> handback
 herd close <lane> [--integrated]       # closes tab / removes worktree; --integrated: dirty worktree whose files the parent already integrated
@@ -58,7 +62,7 @@ herd close <lane> [--integrated]       # closes tab / removes worktree; --integr
 
 Every worker prompt carries:
 
-- the whole slice with product-level acceptance, not a method — implementer lanes delegate per the two-tools rule above (sub-lanes: Sol for well-specified code, kimi for UI) and own their lifecycle;
+- the whole slice with product-level acceptance, not a method — implementer lanes delegate per the two-tools rule above (sub-lanes: Astra or Opus 5.5 for well-specified code, kimi for UI, sonnet scouts for recon) and own their lifecycle;
 - "For exploration/search subagents use `model: sonnet` — the floor tier; keep your own tier for reasoning and synthesis."
 
 (Report-footer and sentinel are herd's job — don't add your own.)
@@ -67,7 +71,7 @@ Every worker prompt carries:
 
 ## Routing
 
-Slice count scales with spec surface: a single-domain spec may be one lane; a full-stack spec gets one implementer per domain slice — each a whole vertical slice owned end-to-end including integration; atomizing into tickets produces modules that pass in isolation and no product. Ambiguous scope → impl-fable, which decomposes by spawning Sol sub-lanes rather than implementing first-hand. UI touching backend → frontend-kimi owns through the API it consumes; the backend lane owns providing it. The cross-lane API contract is the orchestrator's to sort out: settle the shape and write it into both slice prompts before sending; arbitrate any drift yourself — never leave it to review-time discovery or lane-to-lane negotiation.
+Slice count scales with spec surface: a single-domain spec may be one lane; a full-stack spec gets one implementer per domain slice — each a whole vertical slice owned end-to-end including integration; atomizing into tickets produces modules that pass in isolation and no product. Ambiguous scope → impl-fable, which decomposes by spawning Astra/Opus sub-lanes rather than implementing first-hand. UI touching backend → frontend-kimi owns through the API it consumes; the backend lane owns providing it. The cross-lane API contract is the orchestrator's to sort out: settle the shape and write it into both slice prompts before sending; arbitrate any drift yourself — never leave it to review-time discovery or lane-to-lane negotiation.
 
 Acceptance is product-level: "the user can do X", never "module Y's tests pass". **Run the final thing yourself** before calling anything done — drive the real UI hands-on with realistic data volumes, and walk anything web-facing at mobile/tablet/desktop widths (390/768/1440). Lane test suites catch what they were written to catch — a 41-assertion real-browser run once still shipped a mobile layout broken at every width.
 
@@ -85,8 +89,8 @@ Acceptance is product-level: "the user can do X", never "module Y's tests pass".
 
 UI slices are driven for real before review — browser for web, simulator for native (an AR/camera slice also needs a physical-device pass).
 
-- impl-fable done → review-sol gets the branch/diff; impl-sol done → review-fable. **Parallel implementers: hold review until ALL batch lanes have reported, then ONE review pass over the combined diff** — the whole slice at once is what gives the reviewer blast-radius judgment for cuts. Cross-model: pick the reviewer opposite the model that wrote most of the batch. Reviewers are tab lanes, no `--worktree` — the branch diff is visible from the project repo. Adversarial: refute-first, actionable findings only. Reviewer independence: a reviewer never also gets its sibling implementer's work in the same task.
-- frontend-kimi done → **reviewed before the captain ever sees it** by a `review-ui` lane (Sol) armed with the spec — it DRIVES the real UI (browser for web, simulator for native): flows, validation, empty/error states, every viewport width, realistic data; findings arrive via `herd send --review`. The orchestrator reviews personally only when no Sol lane is available (it holds the product context). When the pass is clean, `herd set frontend-kimi state=reviewed` (landing needs it), then present what shipped (screenshot/URL/diff) for taste-level judgment; the captain is never the one to report "text box overflows on mobile." Other lanes don't gate on it.
+- impl-fable done → review-astra gets the branch/diff (review-opus if no Astra lane); impl-astra done → review-fable (Fable 5.1); impl-opus done → review-astra (cross-vendor) or review-fable. **Parallel implementers: hold review until ALL batch lanes have reported, then ONE review pass over the combined diff** — the whole slice at once is what gives the reviewer blast-radius judgment for cuts. Cross-model: pick the reviewer opposite the model that wrote most of the batch. Reviewers are tab lanes, no `--worktree` — the branch diff is visible from the project repo. Adversarial: refute-first, actionable findings only. Reviewer independence: a reviewer never also gets its sibling implementer's work in the same task.
+- frontend-kimi done → **reviewed before the captain ever sees it** by a `review-ui` lane (Astra) armed with the spec — it DRIVES the real UI (browser for web, simulator for native): flows, validation, empty/error states, every viewport width, realistic data; findings arrive via `herd send --review`. The orchestrator reviews personally only when no Astra lane is available (it holds the product context). When the pass is clean, `herd set frontend-kimi state=reviewed` (landing needs it), then present what shipped (screenshot/URL/diff) for taste-level judgment; the captain is never the one to report "text box overflows on mobile." Other lanes don't gate on it.
 - `herd send --review` makes findings arrive as data in `.herd/findings-<lane>-N.json` (herd gives the reviewer the format) — no finding is transcribed by hand.
 - `herd triage <findings.json> --backlog <file> [--promote ID[,ID...]]`: disastrous/architectural/blocking findings and explicitly promoted IDs print for handback (send to the implementing lane verbatim, scoped re-review after the fix); the rest append to the backlog (project tracker or your own todo file) without interrupting anyone.
 
@@ -117,4 +121,4 @@ herd status                                              # every lane closed
 
 Kill/close what the run started (never the captain's own Chrome, sims or servers — compare against what was running when you began). A run is not done while any of it is still up.
 
-`herd close <lane>` as work completes: implementer when its slice landed, reviewer when no review is pending, frontend-kimi once committed and presented. Close only settled agents; read a blocked worker's dialog first. Close refuses tabs it didn't create; worktree lanes lose the worktree (branch stays until landed). On spec completion, update your own project docs per your global rules.
+`herd close <lane>` as work completes: implementer when its slice landed, reviewer when no review is pending, frontend-kimi once committed and presented. Close only settled agents; read a blocked worker's dialog first. Close refuses tabs it didn't create; worktree lanes lose the worktree (branch stays until landed). On spec completion, update your project docs.

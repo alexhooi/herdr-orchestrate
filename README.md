@@ -39,6 +39,7 @@ herd spawn          # launch a lane; trust dialogs pre-empted
 herd send           # hand the lane its task
 herd watch          # the only legal wait; background, one per lane
 herd send --review  # reviewers get findings as JSON
+herd send --refocus # replay a lane's brief after compaction or drift
 herd triage         # blocking findings back verbatim, rest to backlog
 herd land           # review-gated --no-ff merge, conflicts handed back
 herd close          # retire the lane

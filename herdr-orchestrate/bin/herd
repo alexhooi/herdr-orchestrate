@@ -19,13 +19,18 @@ LANDABLE = {"reviewed", "done", "user-review"}
 KIND_ARGS = {
     "claude": ["--model", "claude-fable-5", "--effort", "high",
                "--permission-mode", "bypassPermissions"],
-    "codex": ["-m", "gpt-5.6-sol", "-c", 'model_reasoning_effort="high"',
+    "codex": ["-m", "gpt-6-astra", "-c", 'model_reasoning_effort="high"',
               "-s", "workspace-write", "-a", "never", "--no-alt-screen"],
     "pi": ["--model", "moonshotai/kimi-k3", "--approve"],
 }
 
 FOOTER = ("\n\nFinal message: plain markdown, no box-drawing tables. "
           "End it with a line containing only the token {tok} and nothing else.")
+
+REFOCUS_HEADER = (
+    "Refocus {marker}. Below is the brief you own. Re-read it, check that what "
+    "you are doing right now still serves it, drop anything that does not, and "
+    "continue from where you are - do not restart or re-report finished work.\n\n")
 
 REVIEW_FOOTER = (
     "\n\nWrite every finding to the file {ffile} as a JSON array of objects "
@@ -648,7 +653,7 @@ def cmd_spawn(argv):
 
 def cmd_send(argv):
     lane = argv[0]
-    src, review, state = None, False, None
+    src, review, state, refocus = None, False, None, False
     i = 1
     while i < len(argv):
         a = argv[i]
@@ -656,18 +661,54 @@ def cmd_send(argv):
             src = open(argv[i + 1]).read(); i += 2
         elif a == "--review":
             review = True; i += 1
+        elif a == "--refocus":
+            refocus = True; i += 1
         elif a == "--state":
             state = argv[i + 1]; i += 2
         else:
             src = a; i += 1
+    rec = load()["lanes"].get(lane) or die(f"unknown lane {lane}")
+    if refocus:
+        # Replay the recorded brief so a compacted/drifting lane sees the
+        # intent chain again. Reuses the outstanding report token so an
+        # in-flight `herd watch` keeps working; delivery evidence is the marker.
+        if review or src is not None:
+            die("--refocus takes no prompt and no --review")
+        brief = rec.get("brief")
+        if not brief or not os.path.exists(brief):
+            die(f"lane {lane} has no recorded brief (send it a --file prompt first)")
+        tok = rec.get("token") or "REPORT-END-" + secrets.token_hex(3)
+        marker = "REFOCUS-" + secrets.token_hex(3)
+        prompt = (REFOCUS_HEADER.format(marker=marker) + open(brief).read()
+                  + FOOTER.format(tok=tok))
+        delivered, attempts, _ = deliver(lane, prompt, marker.lower())
+        if not delivered:
+            die(f"refocus to {lane} not delivered after {attempts} attempts", 2)
+
+        def fin_refocus(led):
+            r = led["lanes"][lane]
+            r["token"] = tok
+            r["refocused"] = r.get("refocused", 0) + 1
+            if state:
+                r["state"] = state
+        mutate(fin_refocus)
+        print(json.dumps({"ok": True, "lane": lane, "attempts": attempts,
+                          "token": tok, "refocus": True, "brief": brief}))
+        return
     if src is None:
         src = sys.stdin.read()
     if not src.strip():
         die("refusing to send an empty prompt")
-    load()["lanes"].get(lane) or die(f"unknown lane {lane}")
     tok = "REPORT-END-" + secrets.token_hex(3)
     prompt = src
     ffile = None
+    brief = None
+    if not review:
+        # Persist the brief for later --refocus; a review prompt is not a brief.
+        brief = os.path.join(HERD_DIR, f"brief-{lane}.md")
+        os.makedirs(HERD_DIR, exist_ok=True)
+        with open(brief, "w", encoding="utf-8") as f:
+            f.write(src)
     if review:
         def bump(led):
             r = led["lanes"][lane]
@@ -692,6 +733,8 @@ def cmd_send(argv):
         r["token"] = tok
         r["findings"] = ffile
         r["findings_token"] = tok if review else None
+        if brief:
+            r["brief"] = brief
         if state:
             r["state"] = state
     mutate(fin)
